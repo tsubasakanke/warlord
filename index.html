@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>WARLORD 伝令の戦場</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Noto+Serif+JP:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:"Noto Serif JP","Hiragino Mincho ProN",serif;color:#ece4d2;user-select:none}
+#gl{position:fixed;inset:0;display:block}
+.panel{position:fixed;pointer-events:none;text-shadow:0 1px 3px #000}
+#start,#end{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:20;overflow:auto;
+  background:radial-gradient(ellipse at 50% 30%,#3a2c1a 0%,#14100a 60%,#070504 100%)}
+#end{display:none;background:rgba(0,0,0,.72)}
+.box{width:min(1180px,96vw);background:linear-gradient(#1d1710ee,#120e09ee);border:1px solid #6d5634;border-radius:6px;padding:20px 26px;margin:auto;box-shadow:0 10px 60px #000,inset 0 0 0 1px #2a2014}
+h1{margin:0;font-family:Cinzel,serif;font-size:56px;letter-spacing:10px;color:#e9c77a;text-shadow:0 2px 0 #5a3d12,0 0 30px #a0702055}
+.sub{color:#bfae8e;margin:2px 0 12px;letter-spacing:2px}
+#tabs{display:flex;gap:4px;border-bottom:1px solid #5a4528;margin-bottom:12px}
+.tab{padding:9px 22px;cursor:pointer;color:#b8a27c;border:1px solid transparent;border-bottom:none;border-radius:6px 6px 0 0;font-weight:700;letter-spacing:2px}
+.tab.on{color:#f3d58e;background:#2a2014;border-color:#5a4528}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}
+.opt{padding:8px 14px;border:1px solid #6d5634;border-radius:4px;cursor:pointer;background:#231b11;color:#e8dcc2;font-size:14px}
+.opt.on{background:linear-gradient(#8a6528,#5e4318);border-color:#e9c77a;color:#fff}
+.opt.dis{opacity:.4;cursor:not-allowed}
+.lbl{color:#cdb98f;font-weight:700;margin-top:6px;letter-spacing:1px}
+.go{margin-top:12px;padding:13px 46px;font-size:21px;font-family:inherit;letter-spacing:6px;background:linear-gradient(#d8a446,#9b6b1f);border:1px solid #f0d08a;border-radius:4px;color:#1a1006;font-weight:700;cursor:pointer;box-shadow:0 3px 12px #000}
+.go:disabled{background:#4a3c26;color:#9a8b70;border-color:#6d5634;cursor:not-allowed}
+.btn{padding:8px 16px;background:#b8862e;border:none;border-radius:4px;font-weight:700;cursor:pointer;font-family:inherit}
+input{padding:8px 10px;font-size:16px;background:#0f0c08;color:#fff;border:1px solid #6d5634;border-radius:4px;width:130px;text-transform:uppercase}
+#onlineBox{display:none;margin:4px 0 8px;padding:10px 12px;background:rgba(0,0,0,.35);border-radius:6px}
+#lobbyStatus{margin-top:8px;color:#e9c77a}
+#invite{margin-top:4px;font-size:12px;color:#aab;user-select:text;word-break:break-all}
+table{border-collapse:collapse;font-size:13px;color:#cbbd9f;margin-top:8px}
+td{padding:2px 14px 2px 0}
+kbd{background:#33281a;border:1px solid #6a5a3a;border-radius:3px;padding:0 5px;font-family:inherit}
+#loSummary{color:#e9c77a;font-size:13px;margin-top:8px}
+/* 武具画面 */
+#pageArmory{display:none;grid-template-columns:minmax(0,1fr) minmax(360px,440px);gap:16px}
+.lists{max-height:66vh;overflow:auto;padding-right:6px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin:4px 0 10px}
+.card{padding:7px 10px;border:1px solid #5d4a2e;border-radius:4px;background:#1e170f;cursor:pointer}
+.card b{display:block;font-size:14px}.card span{font-size:11px;color:#a8977a}
+.card.on{border-color:#e9c77a;background:linear-gradient(#5e4318,#3a2a10);box-shadow:0 0 12px #e9c77a44}
+.pvbox{display:flex;flex-direction:column;gap:6px}
+#pv{width:100%;height:440px;border:1px solid #5d4a2e;border-radius:4px;background:#1b1610;cursor:grab}
+#pvMode{margin:0}
+#desc{font-size:13px;line-height:1.6;color:#d8cdb4;background:rgba(0,0,0,.3);padding:8px 12px;border-radius:4px;max-height:22vh;overflow:auto}
+#desc h3{margin:4px 0 2px;color:#f0d08a;font-size:15px}#desc h3 small{margin-left:8px;color:#a8977a;font-weight:400}
+#desc p{margin:2px 0}#desc .stat{color:#9fc6a0}
+/* HUD */
+#hud{display:none}
+#hp{left:50%;bottom:22px;transform:translateX(-50%);width:360px}
+#hpbar{height:12px;background:#2a0606;border:1px solid #000;box-shadow:0 0 0 1px #6d5634}
+#hpfill{height:100%;background:linear-gradient(#e24a3a,#8f1410);width:100%}
+#wpninfo{text-align:center;font-size:13px;margin-bottom:4px;color:#e8dcc2}
+#squads{left:12px;top:12px;font-size:13px;line-height:1.5}
+.sq{padding:2px 9px;border-radius:3px;background:linear-gradient(90deg,rgba(20,14,8,.75),rgba(20,14,8,.25));margin-bottom:2px;border-left:2px solid #6d5634}
+.sq b{color:#f0d08a;margin-right:4px}.sq .cnt{color:#cbbd9f;margin:0 4px}
+.sq.sel{background:linear-gradient(90deg,rgba(200,150,40,.75),rgba(200,150,40,.2));border-left-color:#ffe08a;color:#fff}
+.sq.dead{opacity:.35}
+#obj{left:50%;top:10px;transform:translateX(-50%);text-align:center;font-size:14px;background:linear-gradient(rgba(10,8,4,.6),rgba(10,8,4,0));padding:6px 20px 10px;border-radius:4px}
+#zbar{width:320px;height:8px;background:rgba(0,0,0,.6);position:relative;margin:5px auto;border:1px solid #6d5634}
+#z0,#z1{position:absolute;top:0;height:100%}#z0{left:0}#z1{right:0}
+#log{right:12px;bottom:70px;width:440px;font-size:13px;text-align:right}
+#log div{margin-top:2px}
+#hint{right:12px;top:12px;font-size:12px;color:#ddc;text-align:right;line-height:1.7;background:rgba(10,8,4,.45);padding:6px 10px;border-radius:4px;border:1px solid #4a3a22}
+#cross{left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;background:rgba(255,240,210,.85);border-radius:50%;box-shadow:0 0 0 1px #000}
+#hitm{left:50%;top:50%;transform:translate(-50%,-50%);font-size:30px;color:#fff;opacity:0}
+#dmg{position:fixed;inset:0;pointer-events:none;transition:box-shadow .25s}
+#mapwrap{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:10}
+#map{border:2px solid #7a6440;cursor:crosshair;box-shadow:0 0 40px #000}
+#maphelp{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);font-size:13px;color:#ddc;background:rgba(0,0,0,.6);padding:4px 12px;border-radius:6px;white-space:nowrap}
+#lockmsg{left:50%;top:62%;transform:translateX(-50%);font-size:18px;background:rgba(0,0,0,.5);padding:8px 16px;border-radius:6px}
+#netinfo{left:12px;bottom:12px;font-size:12px;color:#aab}
+#formMenu{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);display:none;gap:6px;z-index:12}
+.fm{background:rgba(20,15,8,.88);border:1px solid #8a6a34;border-radius:4px;padding:6px 10px;min-width:96px;text-align:center;cursor:pointer;font-size:14px;color:#f0e2c0}
+.fm b{display:block;color:#f0d08a;font-size:18px}.fm small{display:block;font-size:10px;color:#b8a888;margin-top:2px;line-height:1.3}
+.fm:hover{border-color:#f0d08a}
+#formBar{position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;gap:4px;align-items:center;font-size:13px;color:#ddc;background:rgba(0,0,0,.6);padding:4px 8px;border-radius:6px;white-space:nowrap}
+#formBar button{font-family:inherit;font-size:12px;padding:3px 8px;background:#2a2014;color:#f0e2c0;border:1px solid #8a6a34;border-radius:3px;cursor:pointer}
+#formBar button:hover{background:#5e4318}
+.sq .fm2{font-size:11px;color:#a8c0d8;margin:0 3px}
+#mapDesc{font-size:12px;color:#a8977a;margin:-4px 0 6px}
+.crow{display:flex;align-items:center;gap:10px;padding:4px 8px;border-bottom:1px solid #3a2e1c}
+.crow b{width:20px;color:#f0d08a;font-size:18px;text-align:center}
+.crow select{font-family:inherit;font-size:14px;background:#0f0c08;color:#fff;border:1px solid #6d5634;border-radius:4px;padding:5px 8px;min-width:150px}
+.crow label{font-size:13px;color:#cdb98f;cursor:pointer}.crow .cn{color:#a8977a;font-size:12px;min-width:60px}.crow .td{color:#8a7b62;font-size:12px}
+#compList{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;margin:6px 0}
+#compInfo{color:#e9c77a;font-size:13px;margin:6px 0}
+#typeHelp{font-size:12px;color:#a8977a;line-height:1.7}
+#formBar .rdy{background:linear-gradient(#d8a446,#9b6b1f);color:#1a1006;font-weight:700;border-color:#f0d08a}
+@media (max-width:860px){#pageArmory{grid-template-columns:1fr}#pv{height:320px}h1{font-size:40px}}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="dmg"></div>
+
+<div id="start"><div class="box">
+  <h1>WARLORD</h1>
+  <div class="sub">伝令の戦場 ― 将として前線に立ち、伝令で全軍を動かせ</div>
+  <div id="tabs"><div class="tab on" data-p="battle">戦場</div><div class="tab" data-p="army">編成</div><div class="tab" data-p="armory">武具（鎧・武器）</div></div>
+
+  <div id="pageBattle">
+    <div class="lbl">対戦</div>
+    <div class="row" id="modes">
+      <div class="opt on" data-mode="solo">ソロ（CPUの将と対戦）</div>
+      <div class="opt" data-mode="online">オンライン対戦（2〜5人）</div>
+    </div>
+    <div id="onlineBox">
+      部屋コード <input id="room" maxlength="8"> <button class="btn" id="join">部屋に入る</button>
+      <div id="lobbyStatus">同じ部屋コードを入れた2〜5人で対戦できる。足りない軍はCPUが入る。</div>
+      <div id="invite"></div>
+    </div>
+    <div class="lbl">戦場 <span id="cfgnote" style="color:#998;font-size:12px;font-weight:400"></span></div>
+    <div class="row" id="maps"></div>
+    <div id="mapDesc"></div>
+    <div class="lbl">軍の数（大将が討たれた軍から脱落。最後に残った軍の勝ち）</div>
+    <div class="row" id="teams">
+      <div class="opt on" data-nt="2">2軍（一騎打ち）</div>
+      <div class="opt" data-nt="3">3軍（三つ巴）</div>
+      <div class="opt" data-nt="4">4軍</div>
+      <div class="opt" data-nt="5">5軍（大乱戦）</div>
+    </div>
+    <div class="lbl">軍の規模</div>
+    <div class="row" id="sizes">
+      <div class="opt" data-size="1">標準</div>
+      <div class="opt on" data-size="2">大軍</div>
+      <div class="opt" data-size="3">決戦</div>
+      <span id="sizeNote" style="align-self:center;font-size:12px;color:#a8977a"></span>
+    </div>
+    <div id="loSummary"></div>
+    <table>
+      <tr><td><kbd>WASD</kbd> 移動 / <kbd>Shift</kbd> 走る / <kbd>Space</kbd> ジャンプ</td><td><kbd>左クリック</kbd> 攻撃 / <kbd>右クリック</kbd> または <kbd>T</kbd>（押している間）防御</td></tr>
+      <tr><td><kbd>E</kbd> 馬に乗る・降りる（騎乗中：W/S 速度、A/D 向き）</td><td><kbd>V</kbd> 一人称 / 三人称の切り替え</td></tr>
+      <tr><td><kbd>1</kbd>〜<kbd>0</kbd> 部隊選択（Shift併用で追加）/ <kbd>@</kbd> 全部隊</td><td><kbd>Tab</kbd> 戦場地図</td></tr>
+      <tr><td><kbd>F</kbd> 照準地点へ移動 / <kbd>C</kbd> 照準地点へ突撃</td><td><kbd>H</kbd> 待機 / <kbd>R</kbd> 自分の元へ集結 / <kbd>G</kbd> 護衛にする・外す</td></tr>
+      <tr><td colspan="2"><kbd>Q</kbd>を押しながら<kbd>1</kbd>〜<kbd>7</kbd> 陣形（横隊・一列・縦隊・方陣・楔形・散開・盾壁）。複数の部隊を選ぶと軍全体が並び直す ／ 三人称はホイールで寄る・引く</td></tr>
+      <tr><td colspan="2" style="color:#9cf">開戦前に布陣の時間がある（90秒）。地図で部隊をドラッグして並べ、陣形と護衛を決めて Enter。部隊が4分の1を切ると60秒後に本陣から援軍が来る。</td></tr>
+      <tr><td colspan="2" style="color:#e9c77a">命令は伝令が馬で届ける。遠い部隊ほど遅く、伝令が敵に捕まると届かない。敵は味方の視界内にいるときしか見えない。</td></tr>
+    </table>
+    <button class="go" id="go">出陣</button>
+  </div>
+
+  <div id="pageArmy" style="display:none">
+    <div class="lbl">部隊の編成 ― 1〜0番の部隊に好きな兵種を入れる（数字キーでその部隊を選ぶ）。「護衛」にした部隊は将のそばについてくる</div>
+    <div id="compList"></div>
+    <div id="compInfo"></div>
+    <div class="row"><div class="opt" id="compReset">標準に戻す</div><div class="opt" data-preset="1">騎兵多め</div><div class="opt" data-preset="2">盾と弓で守る</div><div class="opt" data-preset="3">歩兵の大軍</div></div>
+    <div id="typeHelp"></div>
+  </div>
+
+  <div id="pageArmory">
+    <div class="lists">
+      <div class="lbl">あなた（将）の鎧</div><div class="cards" id="selfList"></div>
+      <div class="lbl">あなたの武器</div><div class="cards" id="wpnList"></div>
+      <div class="lbl">自軍の兵の鎧</div><div class="cards" id="armyList"></div>
+      <div class="lbl">敵軍の鎧（ソロ）</div><div class="cards" id="foeList"></div>
+    </div>
+    <div class="pvbox">
+      <div class="row" id="pvMode"><div class="opt on" data-m="hero">将</div><div class="opt" data-m="army">自軍の兵</div><div class="opt" id="pvHorse">馬に乗せる</div></div>
+      <canvas id="pv"></canvas>
+      <div id="desc"></div>
+      <div style="font-size:11px;color:#8a7b62">ドラッグで回転。形は博物館の実物写真（ref/SOURCES.md）を元に作っている。</div>
+    </div>
+  </div>
+</div></div>
+
+<div id="end"><div class="box" style="text-align:center;width:min(560px,94vw)">
+  <h1 id="endt">勝利</h1><div class="sub" id="ends"></div>
+  <button class="go" id="spec" style="display:none;margin-right:10px">観戦する</button><button class="go" id="again">もう一度</button>
+</div></div>
+
+<div id="hud">
+  <div class="panel" id="squads"></div>
+  <div class="panel" id="obj"></div>
+  <div class="panel" id="hint"></div>
+  <div class="panel" id="log"></div>
+  <div class="panel" id="cross"></div>
+  <div class="panel" id="hitm">✕</div>
+  <div class="panel" id="lockmsg">クリックで操作開始</div>
+  <div class="panel" id="netinfo"></div>
+  <div class="panel" id="hp"><div id="wpninfo"></div><div id="hpbar"><div id="hpfill"></div></div></div>
+</div>
+<div id="formMenu"></div>
+<div id="mapwrap"><div id="formBar"></div><canvas id="map"></canvas><div id="maphelp">左クリック:選択（Shiftで追加） ／ 右クリック:移動 ／ Shift+右クリック:突撃 ／ 上のボタン:陣形 ／ H:待機 R:集結 ／ Tab:閉じる</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

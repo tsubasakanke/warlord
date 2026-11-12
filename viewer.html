@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>WARLORD 武具の確認</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#000}canvas{display:block}#lab{position:fixed;left:8px;top:6px;color:#fff;font:13px sans-serif;text-shadow:0 1px 2px #000}</style></head>
+<body><div id="lab"></div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="module">
+// 開発用：鎧・武器・馬を並べて見るページ。 ?view=armor|horse|weapons|helms&w=1200&h=700
+import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { ARMORS, ARMOR_IDS, WEAPONS, WEAPON_IDS, buildBody, buildWeapon, buildShield, buildHorse, armorMaterial, envDressing } from './js/models.js';
+import { Rig, WEAPON_SWING } from './js/rig.js';
+const q = new URLSearchParams(location.search), view = q.get('view') || 'armor';
+const W = +(q.get('w') || innerWidth), Hh = +(q.get('h') || innerHeight);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setSize(W, Hh); renderer.setPixelRatio(1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.75; renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x8fa6bb);
+// 空を環境マップにして金属に映り込ませる
+const sky = new Sky(); sky.scale.setScalar(50); const su = sky.material.uniforms; su.turbidity.value = 5; su.rayleigh.value = 1.4; su.mieCoefficient.value = 0.005; su.mieDirectionalG.value = 0.8;
+const sun = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(62), THREE.MathUtils.degToRad(140)); su.sunPosition.value.copy(sun);
+const envScene = new THREE.Scene(); envScene.add(sky); const gnd = new THREE.Mesh(new THREE.CircleGeometry(40, 24), new THREE.MeshBasicMaterial({ color: 0x5a5448 })); gnd.rotation.x = -Math.PI / 2; gnd.position.y = -2; envScene.add(gnd);
+envDressing(envScene); const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(envScene, 0.02).texture;
+scene.add(new THREE.HemisphereLight(0xdde8ff, 0x3a4028, 0.5));
+const dl = new THREE.DirectionalLight(0xfff1dc, 2.2); dl.position.copy(sun).multiplyScalar(20); dl.castShadow = true; dl.shadow.mapSize.set(2048, 2048);
+Object.assign(dl.shadow.camera, { left: -12, right: 12, top: 12, bottom: -12, near: 1, far: 60 }); dl.shadow.bias = -0.0003; dl.shadow.normalBias = 0.02; scene.add(dl);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: 0x55603f, roughness: 1 })); ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+const camera = new THREE.PerspectiveCamera(32, W / Hh, 0.05, 200);
+const mat = armorMaterial();
+const lab = document.getElementById('lab'); const items = [];
+function hero(armor, wpn, x, z, face, team = 0, horse = null, anim = 0) {
+  const parts = buildBody(team, armor, true);
+  const W = WEAPONS[wpn] || {};
+  parts.weapon = buildWeapon(wpn, team, true);
+  const shieldKind = W.shield ? (ARMORS[armor].shield) : null;
+  if (shieldKind) parts.shield = buildShield(team, shieldKind, true);
+  if (horse) parts.horse = buildHorse(team, horse, true, armor);
+  const r = new Rig(scene, mat, parts);
+  const e = { id: items.length, x, y: 0, z, face, spd: 0, phase: 0, anim, animDur: 1, swing: WEAPON_SWING[wpn], wpn, alive: true, shieldKind, mounted: !!horse, scale: 1 };
+  const h = horse ? { x, y: 0, z, face, spd: 0, phase: 0, alive: true } : null;
+  r.update(e, h); items.push({ r, e, h }); return { r, e, h };
+}
+if (view === 'armor') {
+  const wp = ['longsword', 'poleaxe', 'arming', 'longsword', 'arming', 'mace', 'glaive', 'arming'];
+  ARMOR_IDS.forEach((id, i) => hero(id, wp[i], (i - 3.5) * 0.95, 0, 0.25 * Math.sin(i), i % 2));
+  camera.position.set(0, 1.25, 10.5); camera.lookAt(0, 1.0, 0);
+  lab.textContent = ARMOR_IDS.map(id => ARMORS[id].name).join(' / ');
+} else if (view === 'one') {
+  const id = q.get('a') || 'gothic'; hero(id, q.get('wp') || 'longsword', 0, 0, +(q.get('f') || 0.5), +(q.get('t') || 0), null, +(q.get('anim') || 0));
+  camera.position.set(0, 1.45, 3.3); camera.lookAt(0, 1.05, 0); lab.textContent = ARMORS[id].name;
+} else if (view === 'anim') { // 動きのコマ送り：行ごとに 歩き/走り/斬り/薙ぎ/叩き/突き/弓/被弾/死
+  const rows = [['walk', 'longsword'], ['run', 'longsword'], ['diag', 'arming'], ['sweep', 'glaive'], ['over', 'poleaxe'], ['thrust', 'spear'], ['draw', 'bow'], ['hit', 'arming'], ['die', 'arming']];
+  const sel = q.get('rows') ? q.get('rows').split(',') : rows.map(r => r[0]);
+  const R = rows.filter(r => sel.includes(r[0]));
+  R.forEach(([kind, wp], r) => { for (let c = 0; c < 7; c++) {
+    const { r: rig, e } = hero(q.get('a') || 'milanese', wp, (c - 3) * 1.1, 0, Math.PI / 2, 0, null, 0);
+    const k = c / 7; e.x = (c - 3) * 1.1; e.y = (R.length - 1 - r) * 2.3; e.z = 0; e.id = c;
+    if (kind === 'walk') { e.spd = 1.6; e.phase = k * Math.PI * 2; }
+    else if (kind === 'run') { e.spd = 6.5; e.phase = k * Math.PI * 2; }
+    else if (kind === 'hit') { e.hitAge = k * 0.45; e.hitSide = 1; e.shieldKind = 'heater'; }
+    else if (kind === 'die') { e.alive = false; e.deadT = k * 1.0; e.id = 1; }
+    else { e.animDur = 1; e.anim = 1 - k; if (wp === 'bow') e.shieldKind = null; }
+    rig.update(e, null, { t: c });
+  } });
+  camera.position.set(0, (R.length - 1) * 1.15 + 1, 18 + R.length * 1.2); camera.lookAt(0, (R.length - 1) * 1.15 + 0.9, 0); camera.fov = 30; camera.updateProjectionMatrix();
+  ground.visible = false; scene.background = new THREE.Color(0x6f7f8f); lab.textContent = R.map(r => r[0]).join(' / ');
+} else if (view === 'helms') {
+  ARMOR_IDS.forEach((id, i) => { const p = buildBody(i % 2, id, true); const m = new THREE.Mesh(p.head, mat); m.position.set((i % 4 - 1.5) * 0.42, i < 4 ? 0.42 : 0, 0); m.rotation.y = 0.6; scene.add(m); m.castShadow = true; });
+  camera.position.set(0, 0.35, 2.4); camera.lookAt(0, 0.33, 0); ground.position.y = -0.3;
+} else if (view === 'horse') {
+  hero(q.get('a') || 'gothic', 'glaive', 0, 0, -1.2, 0, 'barded');
+  hero('milanese', 'lance', 3.2, -1.5, -0.9, 1, 'caparison');
+  camera.position.set(-1.0, 2.0, 7.5); camera.lookAt(1.0, 1.4, 0);
+} else if (view === 'weapons') {
+  WEAPON_IDS.concat(['spear', 'bow']).forEach((id, i) => { const m = new THREE.Mesh(buildWeapon(id, i % 2, true), mat); m.rotation.set(-Math.PI / 2, 0, 0); m.position.set((i - 3.5) * 0.45, 1.6, 0); scene.add(m); m.castShadow = true; });
+  ['heater', 'kite', 'pavise'].forEach((k, i) => { const m = new THREE.Mesh(buildShield(i % 2, k, true), mat); m.position.set(2.2 + i * 0.75, 0.7, 0.5); scene.add(m); });
+  camera.position.set(0.8, 1.5, 6.5); camera.lookAt(0.8, 1.4, 0);
+}
+renderer.render(scene, camera);
+window.shot = async name => { renderer.render(scene, camera); const url = renderer.domElement.toDataURL('image/png'); return (await fetch('/shot?name=' + name, { method: 'POST', body: url })).text(); };
+window.cam = (p, t) => { camera.position.set(...p); camera.lookAt(...t); renderer.render(scene, camera); };
+window.scene = scene; window.ready = true;
+</script></body></html>
