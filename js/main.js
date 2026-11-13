@@ -35,7 +35,7 @@ const CPU_COMPS = [DEFAULT_COMP,
   [{ t: 'cav' }, { t: 'cav' }, { t: 'cav' }, { t: 'inf' }, { t: 'spear' }, { t: 'spear' }, { t: 'archer' }, { t: 'shield' }, { t: 'inf' }, { t: 'guard', esc: 1 }],
   [{ t: 'pavise' }, { t: 'pavise' }, { t: 'shield' }, { t: 'spear' }, { t: 'archer' }, { t: 'archer' }, { t: 'archer' }, { t: 'inf' }, { t: 'cav' }, { t: 'guard', esc: 1 }],
   [{ t: 'inf' }, { t: 'inf' }, { t: 'inf' }, { t: 'shield' }, { t: 'spear' }, { t: 'spear' }, { t: 'archer' }, { t: 'cav' }, { t: 'cav' }, { t: 'guard', esc: 1 }]];
-const MODES = ['hold', 'move', 'charge', 'follow', 'rout'];
+const MODES = ['hold', 'move', 'charge', 'follow', 'rout', 'flee'];
 // 陣形（Q を押しながら 1〜7）。spd=移動速度の倍率
 const FORMS = { line: { name: '横隊', spd: 1, d: '3列ほどの横長。基本の形' }, single: { name: '一列', spd: 0.95, d: '全員が横一列。正面がいちばん広い' },
   column: { name: '縦隊', spd: 1.15, d: '細長く深い。移動が速いが横から弱い' }, block: { name: '方陣', spd: 0.85, d: '正方形の密集。騎兵の突撃に強い' },
@@ -52,7 +52,7 @@ function formSlots(form, type, n, sp) {
   return out;
 }
 function formDims(form, type, n, sp) { let x0 = 1e9, x1 = -1e9, z0 = 0; for (const [x, z] of formSlots(form, type, n, sp)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); } return { w: x1 - x0 + sp, d: -z0 + sp }; }
-const MODE_JP = { hold: '待機', move: '移動中', charge: '突撃', follow: '護衛', rout: '敗走' };
+const MODE_JP = { hold: '待機', move: '移動中', charge: '突撃', follow: '護衛', rout: '敗走', flee: '潰走' };
 const MSG_SPEED = 14, WALL = 265, REINF_T = 60, DEPLOY_T = 90;
 const TEAM_NAME = ['青', '赤', '緑', '金', '紫'], TEAM_CSS = ['#5a8cff', '#ff5a44', '#4cc35a', '#f0c030', '#b46ae6'];
 const TEAM_BG = ['rgba(25,45,110,.85)', 'rgba(125,25,22,.85)', 'rgba(25,90,35,.85)', 'rgba(130,95,12,.88)', 'rgba(80,30,110,.85)'];
@@ -68,6 +68,9 @@ const MAPS = {
   mountain: { name: '山岳（峠）', d: '細い谷あいの峠道。2軍のみ', max: 2 },
 };
 let MAP = 'hill', SIZE = 2, NT = 2, TEAM_A = [0, Math.PI];
+// 陣営：SIDE[t] が同じ軍どうしは味方（乱戦では全部ちがう）。協力戦では人間側と敵側の2陣営
+let SIDE = [0, 1, 2, 3, 4], COOP = false, ODDS = 1, TEAM_OFF = [], ZW = [];
+const ally = (a, b) => SIDE[a] === SIDE[b];
 const valleyX = z => 40 * Math.sin(z * 0.011);
 const riverZ = x => 22 * Math.sin(x * 0.011 + 0.6) + 9 * Math.sin(x * 0.029);
 const FORDS = [-150, 150], BRIDGE_X = -10, WATER_Y = -0.7;
@@ -111,13 +114,13 @@ function forestAt(x, z) {
 // ===== 陣地（軍ごとの開始位置。b=後ろ向き, l=横向き） =====
 function teamFrame(t) {
   if (MAP === 'mountain') { const sgn = t === 0 ? 1 : -1, z = sgn * 160; return { bx: valleyX(z), bz: z, b: [0, sgn], l: [sgn, 0], face: t === 0 ? Math.PI : 0, a: t === 0 ? 0 : Math.PI }; }
-  const a = TEAM_A[t], R = NT <= 2 ? 185 : 172;
-  return { bx: Math.sin(a) * R, bz: Math.cos(a) * R, b: [Math.sin(a), Math.cos(a)], l: [Math.cos(a), -Math.sin(a)], face: a + Math.PI, a };
+  const a = TEAM_A[t], R = NT <= 2 || COOP ? 185 : 172, off = TEAM_OFF[t] || 0;
+  return { bx: Math.sin(a) * R + Math.cos(a) * off, bz: Math.cos(a) * R - Math.sin(a) * off, b: [Math.sin(a), Math.cos(a)], l: [Math.cos(a), -Math.sin(a)], face: a + Math.PI, a };
 }
 function fw(t, lx, d) { const F = teamFrame(t); let x = F.bx + F.l[0] * lx + F.b[0] * d; const z = F.bz + F.l[1] * lx + F.b[1] * d; if (MAP === 'mountain') x += valleyX(z) - valleyX(F.bz); return [clamp(x, -WALL + 6, WALL - 6), clamp(z, -WALL + 6, WALL - 6)]; }
 function toFrame(t, x, z) { const F = teamFrame(t); let dx = x - F.bx; const dz = z - F.bz; if (MAP === 'mountain') dx -= valleyX(z) - valleyX(F.bz); return [dx * F.l[0] + dz * F.l[1], dx * F.b[0] + dz * F.b[1]]; }
-function zoneDims() { return MAP === 'mountain' ? { w: 26, d0: -6, d1: 85 } : { w: [0, 0, 125, 105, 88, 72][NT], d0: -8, d1: 72 }; }
-function clampDeploy(t, x, z) { const Z = zoneDims(), [lx, d] = toFrame(t, x, z); return fw(t, clamp(lx, -Z.w, Z.w), clamp(d, Z.d0, Z.d1)); }
+function zoneDims(t) { return MAP === 'mountain' ? { w: 26, d0: -6, d1: 85 } : { w: (t !== undefined && ZW[t]) || [0, 0, 125, 105, 88, 72][NT], d0: -8, d1: 72 }; }
+function clampDeploy(t, x, z) { const Z = zoneDims(t), [lx, d] = toFrame(t, x, z); return fw(t, clamp(lx, -Z.w, Z.w), clamp(d, Z.d0, Z.d1)); }
 
 // ===== 装備・編成（武具画面と編成画面で選ぶ） =====
 const LO_KEY = 'warlord-lo';
@@ -146,7 +149,7 @@ function forNear(x, z, r, fn) {
   const i0 = Math.floor((x - r) / CS) + 100, i1 = Math.floor((x + r) / CS) + 100, j0 = Math.floor((z - r) / CS) + 100, j1 = Math.floor((z + r) / CS) + 100;
   for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) { const a = grid.get(gk(i, j)); if (a) for (let n = 0; n < a.length; n++) fn(a[n]); }
 }
-function nearestEnemy(e, r) { let best = null, bd = r * r; forNear(e.x, e.z, r, o => { if (o.team === e.team || o.rout) return; const dx = o.x - e.x, dz = o.z - e.z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = o; } }); return best; }
+function nearestEnemy(e, r) { let best = null, bd = r * r; forNear(e.x, e.z, r, o => { if (ally(o.team, e.team) || o.rout) return; const dx = o.x - e.x, dz = o.z - e.z, d = dx * dx + dz * dz; if (d < bd) { bd = d; best = o; } }); return best; }
 const radOf = e => e.mounted ? 0.9 : e.T.rad;
 
 // ===== 兵士 =====
@@ -166,7 +169,7 @@ function setHero(e, t) {
 }
 class Squad {
   constructor(team, type, x, z, face, num, n) {
-    Object.assign(this, { idx: squads.length, team, type, T: TYPES[type], num, ax: x, az: z, tx: x, tz: z, face, mode: 'hold', form: 'line', tface: null, members: [], alive: [], pending: 0, cx: x, cz: z, moving: false, engaged: 0, full: n, home: { lx: 0, d: 0 }, escort: false, reinfT: 0 });
+    Object.assign(this, { idx: squads.length, team, type, T: TYPES[type], num, ax: x, az: z, tx: x, tz: z, face, mode: 'hold', form: 'line', tface: null, members: [], alive: [], pending: 0, cx: x, cz: z, moving: false, engaged: 0, full: n, home: { lx: 0, d: 0 }, escort: false, reinfT: 0, mor: 100, fleeT: 0, hidT: -99, ambT: -99 });
     squads.push(this);
     for (let i = 0; i < n; i++) this.members.push(makeEnt(team, type, x, z, this));
     this.alive = this.members.slice(); this.snap();
@@ -184,6 +187,17 @@ class Squad {
     // 援軍：兵が4分の1を切ると、しばらくして本陣から補充が来る（将が生きている限り）
     if (!elim[this.team] && this.mode !== 'rout' && al.length < this.full * 0.25) { if (!this.reinfT) this.reinfT = gameT + REINF_T; else if (gameT >= this.reinfT) { reinforce(this); return; } } else this.reinfT = 0;
     if (!al.length || this.mode === 'rout') return;
+    // 士気：落ち着いていれば回復、将のそばだと早く回復。0になると崩れて逃げる
+    if (this.mode === 'flee') {
+      const [hx, hz] = fw(this.team, this.home.lx * 0.6, zoneDims(this.team).d1 - 8); this.tx = hx; this.tz = hz; this.tface = null;
+      let near = false; forNear(this.cx, this.cz, 18, o => { if (!near && o.alive && !o.rout && !ally(o.team, this.team) && Math.abs(o.x - this.cx) + Math.abs(o.z - this.cz) < 22) near = true; });
+      this.mor = Math.min(100, this.mor + (near ? 0.6 : 5) * dt);
+      if (gameT - this.fleeT > 8 && this.mor >= 40 && !near) { this.mode = this.escort && !guards[this.team] ? 'follow' : 'hold'; this.tx = this.ax; this.tz = this.az; teamLog(this.team, `第${this.num}隊(${this.T.name})が踏みとどまり、隊列を立て直した`, '#9f9'); }
+    } else {
+      const h = heroes[this.team], nearH = h && h.alive && Math.hypot(h.x - this.cx, h.z - this.cz) < 30;
+      if (this.engaged < 0.05) this.mor = Math.min(100, this.mor + (nearH ? 4.5 : 1.5) * dt); else if (nearH) this.mor = Math.min(100, this.mor + 1.2 * dt);
+      if (this.mor <= 0) breakSquad(this);
+    }
     if (this.mode === 'follow') { const h = heroes[this.team]; if (h.alive && !h.squad) { const [nx, nz] = this.followPoint(); if (Math.hypot(nx - this.tx, nz - this.tz) > 3) { this.tx = nx; this.tz = nz; } this.tface = h.face; } }
     const dx = this.tx - this.ax, dz = this.tz - this.az, d = Math.hypot(dx, dz);
     this.moving = d > 1.5;
@@ -194,8 +208,9 @@ class Squad {
       let sp = this.T.speed * 0.8 * (al[0].spdMul || 1) * (FORMS[this.form] || FORMS.line).spd * slowAt(this.ax, this.az);
       if (this.mode === 'follow') sp *= 1.35;
       const ah = H(this.ax + dx / d * 2, this.az + dz / d * 2), y0 = H(this.ax, this.az); sp *= clamp(1 - (ah - y0) / 2 * 1.1, 0.35, 1.2);
-      if (this.mode !== 'charge' && lag > 10) sp *= 0.25;
-      if (this.engaged > 0.35 && this.mode !== 'charge') sp = 0;
+      if (this.mode === 'flee') sp *= 1.3;
+      else { if (this.mode !== 'charge' && lag > 10) sp *= 0.25;
+        if (this.engaged > 0.35 && this.mode !== 'charge') sp = 0; }
       const st = Math.min(d, sp * dt); this.ax += dx / d * st; this.az += dz / d * st;
       if (d > 3) this.face = lerpAngle(this.face, Math.atan2(dx, dz), dt * 2.5);
     } else if (this.mode === 'move' || this.mode === 'charge') this.mode = 'hold';
@@ -208,13 +223,30 @@ class Squad {
     for (let i = 0; i < n; i++) { const [lx, lz] = sl[i]; al[i].sx = this.ax + c * lx + s * lz; al[i].sz = this.az - s * lx + c * lz; }
   }
 }
+// 士気を削る（将が率いる隊は崩れにくい）
+function shake(s, v) { if (!s || s.mode === 'rout' || s.mode === 'flee') return; const h = s.members[0]; s.mor -= v * (h && h.type === 'hero' && h.alive ? 0.4 : 1); }
+function breakSquad(s) {
+  s.mode = 'flee'; s.fleeT = gameT; s.mor = 0; s.tface = null;
+  teamLog(s.team, `第${s.num}隊(${s.T.name})が崩れて逃げ出した！`, '#f86');
+  for (let t = 0; t < NT; t++) if (!ally(t, s.team) && human.has(t) && s.alive.some(m => m.seen || t !== ME)) teamLog(t, `${TEAM_NAME[s.team]}軍の${s.T.name}が崩れた！ 追い打ちの好機`, '#fd8');
+  for (const o of squads) if (o !== s && o.team === s.team && o.alive.length && Math.hypot(o.cx - s.cx, o.cz - s.cz) < 35) shake(o, 12); // 隣が崩れると動揺が広がる
+}
+// 1秒ごと：敵のどの陣営からも見えていない部隊を記録（そこから襲うと奇襲になる）
+let morT = 0;
+function moraleTick(dt) {
+  morT -= dt; if (morT > 0) return; morT = 1;
+  const sides = [...new Set(SIDE.slice(0, NT).filter((x, t) => !elim[t]))], sp = new Map(sides.map(x => [x, spotters(SIDE.indexOf(x))]));
+  for (const s of squads) { if (!s.alive.length) continue; const pt = { x: s.cx, z: s.cz, y: H(s.cx, s.cz) }; let seen = false;
+    for (const [x, list] of sp) if (x !== SIDE[s.team] && canSee(list, pt)) { seen = true; break; }
+    if (!seen && !s.moving && forestAt(s.cx, s.cz)) s.hidT = gameT; } // 森でじっと潜んでいる間だけ（そこから飛び出すと奇襲）
+}
 function reinforce(s) {
-  s.reinfT = 0; const [bx, bz] = fw(s.team, s.home.lx * 0.5, zoneDims().d1 - 10), F = teamFrame(s.team); let n = 0;
+  s.reinfT = 0; const [bx, bz] = fw(s.team, s.home.lx * 0.5, zoneDims(s.team).d1 - 10), F = teamFrame(s.team); let n = 0;
   if (!s.alive.length) { s.ax = s.tx = bx; s.az = s.tz = bz; s.face = F.face; s.mode = 'hold'; s.tface = null; }
   for (const m of s.members) { if (m.alive || m.gone || m.type === 'hero') continue;
     Object.assign(m, { alive: true, hp: m.T.hp, x: bx + (Math.random() - 0.5) * 12, z: bz + (Math.random() - 0.5) * 12, deadT: 0, settled: false, target: null, anim: 0, face: F.face, mounted: !!m.T.mounted, hitAge: 9 });
     m.y = H(m.x, m.z); if (m.h) Object.assign(m.h, { alive: true, deadT: 0, x: m.x, z: m.z, y: m.y }); n++; }
-  s.derive(); if (n) teamLog(s.team, `第${s.num}隊(${s.T.name})に援軍 ${n}人が本陣に到着`, '#9cf');
+  s.mor = Math.max(s.mor, 70); s.derive(); if (n) teamLog(s.team, `第${s.num}隊(${s.T.name})に援軍 ${n}人が本陣に到着`, '#9cf');
 }
 // 自動の初期配置（編成の順に、大楯・盾を中央、弓を後ろ、騎兵を両翼、護衛を将のそばへ）
 function autoLayout(list, Z) {
@@ -237,7 +269,7 @@ function autoLayout(list, Z) {
   return pos.map((p, i) => { const D = dim(list[i]); return [clamp(p[0], -W + Math.min(W, D.w / 2), W - Math.min(W, D.w / 2)), clamp(p[1], Z.d0, Z.d1)]; });
 }
 function spawnArmy(t, lo, ai) {
-  const comp = validComp(lo.comp) ? lo.comp : DEFAULT_COMP, Z = zoneDims(), F = teamFrame(t), mul = SIZE * (NT <= 2 ? 1 : 2.3 / NT);
+  const comp = validComp(lo.comp) ? lo.comp : DEFAULT_COMP, Z = zoneDims(t), F = teamFrame(t), mul = armyMul(t);
   const list = []; comp.forEach((c, i) => { if (c && TYPES[c.t] && c.t !== 'hero') list.push({ type: c.t, esc: !!c.esc, num: (i + 1) % 10, n: Math.max(4, Math.round(TYPES[c.t].n * mul)), form: c.t === 'cav' ? 'wedge' : 'line' }); });
   const pos = autoLayout(list, Z), [hx, hz] = fw(t, 0, Z.d1 - 6);
   const hero = makeEnt(t, 'hero', hx, hz, null); hero.face = F.face; setHero(hero, t); heroes[t] = hero;
@@ -247,6 +279,12 @@ function spawnArmy(t, lo, ai) {
     if (!g) { const [x, z] = fw(t, 0, Z.d1 - 14); g = new Squad(t, 'guard', x, z, F.face, '衛', Math.round(12 * Math.max(1, mul * 0.75))); }
     hero.squad = g; g.members.unshift(hero); g.mode = 'hold'; g.escort = true; guards[t] = g; g.snap();
   } else horses[t] = { id: t, x: hx + 1.5, z: hz, y: H(hx + 1.5, hz), face: F.face, spd: 0, cyc: 0, alive: true, team: t };
+}
+// 1軍の人数の倍率。協力戦は陣営ごとに分け合い、敵側は「敵の兵力」倍
+function armyMul(t) {
+  if (!COOP) return SIZE * (NT <= 2 ? 1 : 2.3 / NT);
+  const A = SIDE.slice(0, NT).filter(x => x === SIDE[0]).length, mine = SIZE * (A <= 1 ? 1 : 1.3); // 味方陣営の合計
+  return ally(t, 0) ? mine / A : mine * ODDS / (NT - A); // 敵陣営の合計＝味方の合計×倍率
 }
 // 人が操作していた軍をCPUに任せる（回線が切れたとき）
 function cpuTakeover(t) {
@@ -285,6 +323,8 @@ const SFX = {
 // ===== 戦闘 =====
 function dealDamage(a, b, base, ranged, pierce) {
   if (!b.alive) return; let d = base;
+  const amb = !!(a.squad && b.squad && gameT - a.squad.hidT < 10 && a.squad.mode !== 'flee'); // 見えていなかった隊からの奇襲
+  if (amb && !ranged) d *= 1.3;
   if (!ranged) {
     if ((b.type === 'cav' || b.mounted) && a.T.vsCav) d *= a.T.vsCav;
     if (a.T.charge && a.spd > 6) { const bf = b.squad && b.squad.form; d *= (bf === 'block' || bf === 'shieldwall') ? 1.3 : a.T.charge * (a.squad && a.squad.form === 'wedge' ? 1.25 : 1); }
@@ -304,6 +344,11 @@ function dealDamage(a, b, base, ranged, pierce) {
   }
   const df = b.def || 1; d *= pierce ? 1 - (1 - df) * 0.35 : df;
   b.hp -= d;
+  const BS = b.squad; if (BS && b.type !== 'hero' && phase === 'battle') { // 士気：横や後ろから、突撃、将の斬り込み、奇襲、損害で下がる
+    let m = ranged ? 0.12 : 0; if (!front && !ranged) m += d * 0.06; if (!ranged && a.T && a.T.charge && a.spd > 6) m += 1.2; if (a.type === 'hero' && !ranged) m += 0.6;
+    if (b.hp <= 0) m += 100 / BS.full * (front ? 1 : 1.6);
+    if (amb && gameT > BS.ambT) { BS.ambT = gameT + 25; m += 35; teamLog(b.team, `伏兵だ！ 第${BS.num}隊(${BS.T.name})が奇襲を受けた`, '#f86'); teamLog(a.team, `奇襲成功！ 敵の${BS.T.name}が浮き足立った`, '#fd8'); }
+    if (m) shake(BS, m); }
   if (!parried && d > 2) { b.hitAge = 0; b.hitSide = (fx * dz - fz * dx) > 0 ? 1 : -1; }
   if (b.type === 'hero') { b.lastHurt = gameT; if (b === player) { hurtFx(d); CAM.shake = Math.min(0.6, CAM.shake + d / 60); } }
   if (a === player && !ranged) { CAM.hitstop = Math.max(CAM.hitstop, d > 30 ? 0.085 : 0.05); CAM.kick = Math.min(1, CAM.kick + 0.5); }
@@ -324,7 +369,7 @@ function updateArrows(dt, visualOnly) {
     a.vy -= 9.8 * dt; a.x += a.vx * dt; a.y += a.vy * dt; a.z += a.vz * dt;
     if (!visualOnly) {
       let hit = null;
-      forNear(a.x, a.z, 1, o => { if (hit || o.team === a.team) return; if (Math.abs(o.x - a.x) < 0.6 && Math.abs(o.z - a.z) < 0.6 && a.y > o.y && a.y < o.y + (o.mounted ? 2.9 : 2.0)) hit = o; });
+      forNear(a.x, a.z, 1, o => { if (hit || ally(o.team, a.team)) return; if (Math.abs(o.x - a.x) < 0.6 && Math.abs(o.z - a.z) < 0.6 && a.y > o.y && a.y < o.y + (o.mounted ? 2.9 : 2.0)) hit = o; });
       if (hit) { dealDamage({ x: a.x - a.vx, z: a.z - a.vz, y: a.y, T: {}, team: a.team }, hit, a.dmg, true); arrows.splice(i, 1); continue; }
     }
     if (a.y < H(a.x, a.z)) { a.stuck = 8; if (arrows.length > 700) arrows.splice(i, 1); }
@@ -350,6 +395,7 @@ function soldierAI(e, dt) {
     if (e.routT <= 0) { e.alive = false; e.gone = true; if (e.h) e.h.alive = false; return; }
     const F = teamFrame(e.team); moveEnt(e, e.x + F.b[0] * 30 + Math.sin(e.id) * 8, e.z + F.b[1] * 30 + Math.cos(e.id) * 8, T.speed * 1.2, dt, true); return; }
   e.cd -= dt; e.scd -= dt; e.think -= dt;
+  if (S.mode === 'flee') { e.target = null; e.blocking = false; e.ready = false; moveEnt(e, e.sx, e.sz, T.speed * (e.spdMul || 1) * 1.1, dt, true); return; }
   if (e.target && !e.target.alive) e.target = null;
   if (e.think <= 0) {
     e.think = 0.25 + Math.random() * 0.2;
@@ -394,19 +440,20 @@ function updateMsgs(dt) {
   for (let i = msgs.length - 1; i >= 0; i--) { const m = msgs[i], s = m.squad;
     if (!s.alive.length) { msgs.splice(i, 1); s.pending--; continue; }
     const dx = s.cx - m.x, dz = s.cz - m.z, d = Math.hypot(dx, dz);
+    if (d < 3.5 && s.mode === 'flee') { s.pending--; msgs.splice(i, 1); teamLog(m.team, `第${s.num}隊は混乱していて命令を聞けない`, '#f86'); continue; }
     if (d < 3.5) { applyOrder(s, m.order); s.pending--; msgs.splice(i, 1); teamLog(m.team, `第${s.num}隊 命令受領：${m.order.form ? FORMS[m.order.form].name : MODE_JP[m.order.mode]}`, '#9f9'); continue; }
     const sl = clamp(1 - (H(m.x + dx / d * 2, m.z + dz / d * 2) - H(m.x, m.z)) / 2 * 0.8, 0.5, 1.2);
     const st = Math.min(d, MSG_SPEED * sl * dt); m.face = Math.atan2(dx, dz); m.x += dx / d * st; m.z += dz / d * st; m.y = H(m.x, m.z); m.cyc += 14 / 6.2 * dt;
-    m.chk -= dt; if (m.chk <= 0) { m.chk = 0.2; let hit = false; forNear(m.x, m.z, 2.5, o => { if (o.team !== m.team && Math.hypot(o.x - m.x, o.z - m.z) < 2.5) hit = true; });
+    m.chk -= dt; if (m.chk <= 0) { m.chk = 0.2; let hit = false; forNear(m.x, m.z, 2.5, o => { if (!ally(o.team, m.team) && o.alive && !o.rout && Math.hypot(o.x - m.x, o.z - m.z) < 2.5) hit = true; });
       if (hit) { s.pending--; msgs.splice(i, 1); teamLog(m.team, `第${s.num}隊への伝令が討たれた！`, '#f86'); } }
   }
 }
 
 // ===== 索敵 =====
 function spotters(team) {
-  const sp = []; for (const s of squads) if (s.team === team && s.alive.length && s.mode !== 'rout') sp.push([s.cx, s.cz, H(s.cx, s.cz), 60]);
-  const h = heroes[team]; if (h && h.alive) sp.push([h.x, h.z, h.y + (h.mounted ? 1 : 0), 90]);
-  if (zone && zone.holder === team) sp.push([zone.x, zone.z, H(zone.x, zone.z) + 6, 120]); // 丘を押さえると遠くまで見渡せる
+  const sp = []; for (const s of squads) if (ally(s.team, team) && s.alive.length && s.mode !== 'rout') sp.push([s.cx, s.cz, H(s.cx, s.cz), 60]);
+  for (let t = 0; t < NT; t++) { const h = heroes[t]; if (ally(t, team) && h && h.alive) sp.push([h.x, h.z, h.y + (h.mounted ? 1 : 0), 90]); }
+  if (zone && zone.holder >= 0 && ally(zone.holder, team)) sp.push([zone.x, zone.z, H(zone.x, zone.z) + 6, 120]); // 丘を押さえると遠くまで見渡せる
   return sp;
 }
 function canSee(sp, e) { const ey = e.y ?? H(e.x, e.z), fk = forestAt(e.x, e.z) ? 0.45 : 1; for (const [x, z, y, r] of sp) { const R = (r + clamp((y - ey) * 3, 0, 60)) * fk, dx = e.x - x, dz = e.z - z; if (dx * dx + dz * dz < R * R) return true; } return false; }
@@ -415,16 +462,16 @@ function canSee(sp, e) { const ey = e.y ?? H(e.x, e.z), fk = forestAt(e.x, e.z) 
 function aiThink(team) {
   if (elim[team] || !heroes[team].alive) return;
   const sp = spotters(team), groups = [], F = teamFrame(team);
-  for (const s of squads) if (s.team !== team && s.alive.length && s.mode !== 'rout') { const v = s.alive.filter(m => canSee(sp, m)); if (v.length) { let x = 0, z = 0; for (const m of v) { x += m.x; z += m.z; } groups.push({ x: x / v.length, z: z / v.length, type: s.type, n: v.length }); } }
-  for (let t = 0; t < NT; t++) { const foe = heroes[t]; if (t !== team && foe.alive && canSee(sp, foe)) groups.push({ x: foe.x, z: foe.z, type: 'hero', n: 1 }); }
-  const mine = squads.filter(s => s.team === team && s.alive.length && s !== guards[team] && s.mode !== 'rout');
+  for (const s of squads) if (!ally(s.team, team) && s.alive.length && s.mode !== 'rout') { const v = s.alive.filter(m => canSee(sp, m)); if (v.length) { let x = 0, z = 0; for (const m of v) { x += m.x; z += m.z; } groups.push({ x: x / v.length, z: z / v.length, type: s.type, n: v.length }); } }
+  for (let t = 0; t < NT; t++) { const foe = heroes[t]; if (!ally(t, team) && foe.alive && canSee(sp, foe)) groups.push({ x: foe.x, z: foe.z, type: 'hero', n: 1 }); }
+  const mine = squads.filter(s => s.team === team && s.alive.length && s !== guards[team] && s.mode !== 'rout' && s.mode !== 'flee');
   let mx = F.bx, mz = F.bz; if (mine.length) { mx = 0; mz = 0; for (const s of mine) { mx += s.cx; mz += s.cz; } mx /= mine.length; mz /= mine.length; }
   // 目標：区域があればそこ、なければ見えている敵、見えなければ一番近い生きている敵の本陣へ少しずつ進む
   let obj;
   if (zone) obj = { x: zone.x + F.b[0] * 8, z: zone.z + F.b[1] * 8 };
-  else if (MAP === 'mountain') { const sg = team === 0 ? 1 : -1; obj = { x: valleyX(6 * sg), z: 6 * sg }; }
+  else if (MAP === 'mountain') { const sg = SIDE[team] === SIDE[0] ? 1 : -1; obj = { x: valleyX(6 * sg), z: 6 * sg }; }
   else if (groups.length) { let best = null, bd = 1e9; for (const g of groups) { const d = Math.hypot(g.x - mx, g.z - mz); if (d < bd) { bd = d; best = g; } } obj = { x: best.x + F.b[0] * 20, z: best.z + F.b[1] * 20 }; }
-  else { let best = null, bd = 1e9; for (let t = 0; t < NT; t++) { if (t === team || elim[t]) continue; const G = teamFrame(t), d = Math.hypot(G.bx - F.bx, G.bz - F.bz); if (d < bd) { bd = d; best = G; } }
+  else { let best = null, bd = 1e9; for (let t = 0; t < NT; t++) { if (ally(t, team) || elim[t]) continue; const G = teamFrame(t), d = Math.hypot(G.bx - F.bx, G.bz - F.bz); if (d < bd) { bd = d; best = G; } }
     if (!best) best = { bx: 0, bz: 0 }; const dx = best.bx - F.bx, dz = best.bz - F.bz, L = Math.hypot(dx, dz) || 1, p = clamp(gameT * 1.4 - 20, 0, L * 0.5); obj = { x: F.bx + dx / L * p, z: F.bz + dz / L * p }; }
   let fx = obj.x - F.bx, fz = obj.z - F.bz; { const L = Math.hypot(fx, fz); if (L < 20) { fx = -F.b[0]; fz = -F.b[1]; } else { fx /= L; fz /= L; } }
   const lx = -fz, lz = fx, bx = -fx, bz = -fz; // 横と後ろ（目標に向いたときの）
@@ -450,17 +497,19 @@ function aiThink(team) {
 // ===== 勝敗：将が討たれた軍は総崩れ。最後に将が残った軍の勝ち =====
 function objectives(dt) {
   if (zone) { const c = new Array(NT).fill(0); for (const e of ents) if (e.alive && !e.rout && Math.hypot(e.x - zone.x, e.z - zone.z) < zone.r) c[e.team]++; zone.c = c;
-    let hold = -1, k = 0; for (let t = 0; t < NT; t++) if (c[t]) { hold = t; k++; } zone.holder = k === 1 ? hold : -1;
-    if (zone.holder >= 0) for (const e of ents) if (e.alive && e.team === zone.holder && e.hp < e.T.hp && Math.hypot(e.x - zone.x, e.z - zone.z) < zone.r) e.hp = Math.min(e.T.hp, e.hp + (e.type === 'hero' ? 6 : 1.5) * dt); }
+    let hold = -1, k = 0; for (let t = 0; t < NT; t++) if (c[t] && SIDE[t] !== hold) { hold = SIDE[t]; k++; } zone.holder = k === 1 ? hold : -1;
+    if (zone.holder >= 0) for (const e of ents) if (e.alive && ally(e.team, zone.holder) && e.hp < e.T.hp && Math.hypot(e.x - zone.x, e.z - zone.z) < zone.r) e.hp = Math.min(e.T.hp, e.hp + (e.type === 'hero' ? 6 : 1.5) * dt); }
   for (let t = 0; t < NT; t++) if (!elim[t] && !heroes[t].alive) eliminate(t);
-  const left = []; for (let t = 0; t < NT; t++) if (!elim[t]) left.push(t);
-  if (left.length <= 1) finish(left.length ? left[0] : -1, 'gen');
+  const left = new Set(); for (let t = 0; t < NT; t++) if (!elim[t]) left.add(SIDE[t]);
+  if (left.size <= 1) finish(left.size ? [...left][0] : -1, 'gen');
 }
 function eliminate(t) {
   if (elim[t]) return; elim[t] = true; const left = elim.filter(x => !x).length; place[t] = left + 1;
+  for (const s of squads) if (s.team !== t && ally(s.team, t) && s.alive.length && Math.hypot(s.cx - heroes[t].x, s.cz - heroes[t].z) < 80) s.mor -= 25; // 味方の将が討たれると近くの兵は動揺
+  for (const s of squads) if (!ally(s.team, t) && s.alive.length) s.mor = Math.min(100, s.mor + 20);
   for (const s of squads) if (s.team === t) { s.mode = 'rout'; s.pending = 0; s.reinfT = 0; for (const m of s.members) if (m.alive) { m.rout = true; m.routT = 5 + Math.random() * 7; } }
   for (let i = msgs.length - 1; i >= 0; i--) if (msgs[i].team === t) msgs.splice(i, 1);
-  const by = heroes[t].killer, who = by >= 0 && by !== t ? `${TEAM_NAME[by]}軍が` : '';
+  const by = heroes[t].killer, who = by >= 0 && !ally(by, t) ? `${TEAM_NAME[by]}軍が` : '';
   if (NET.mode === 'host') pushEv(['elim', t, place[t], by ?? -1]);
   onEliminated(t, place[t], by);
   log(`${who}${TEAM_NAME[t]}軍の将を討ち取った！ ${TEAM_NAME[t]}軍は総崩れ`, TEAM_CSS[t]);
@@ -470,16 +519,16 @@ function onEliminated(t, pl, by) {
   elim[t] = true; place[t] = pl;
   if (t === ME && !ended) { document.exitPointerLock?.();
     $('endt').textContent = '討ち死に'; $('endt').style.color = '#e55';
-    $('ends').innerHTML = `${by >= 0 && by !== t ? TEAM_NAME[by] + '軍に' : ''}討たれた… ${NT > 2 ? `${NT}軍中 ${pl}位` : ''}<br>戦闘時間 ${fmtT(gameT)} ／ あなたの撃破数 ${player.kills}`;
+    $('ends').innerHTML = `${by >= 0 && !ally(by, t) ? TEAM_NAME[by] + '軍に' : ''}討たれた… ${COOP ? (SIDE.slice(0, NT).filter((x, u) => x === SIDE[ME] && !elim[u]).length ? '味方の将はまだ戦っている' : '') : NT > 2 ? `${NT}軍中 ${pl}位` : ''}<br>戦闘時間 ${fmtT(gameT)} ／ あなたの撃破数 ${player.kills}`;
     $('spec').style.display = 'inline-block'; $('end').style.display = 'flex'; }
 }
 const fmtT = t => `${Math.floor(t / 60)}分${Math.floor(t % 60)}秒`;
 function finish(win, kind) { if (ended) return; if (NET.mode === 'host') pushEv(['end', win, kind]); end(win, kind); }
 function end(winTeam, kind) {
   if (ended) return; ended = true; running = !!spectate; document.exitPointerLock?.();
-  const win = winTeam === ME;
+  const win = winTeam >= 0 && ally(winTeam, ME);
   $('endt').textContent = kind === 'drop' ? '中断' : win ? '勝利' : '敗北'; $('endt').style.color = kind === 'drop' ? '#ccc' : win ? '#e8c77a' : '#e55';
-  const why = kind === 'drop' ? 'ホストとの接続が切れた' : win ? (NT > 2 ? `最後まで生き残った！ ${NT}軍の頂点` : '敵将を討ち取った！') : winTeam >= 0 ? `${TEAM_NAME[winTeam]}軍の勝利${elim[ME] && NT > 2 ? `（あなたは ${place[ME]}位）` : ''}` : '引き分け';
+  const why = kind === 'drop' ? 'ホストとの接続が切れた' : win ? (COOP ? (ODDS > 1 ? `${ODDS}倍の敵に勝った！ 敵将をすべて討ち取った` : '敵将をすべて討ち取った！') : NT > 2 ? `最後まで生き残った！ ${NT}軍の頂点` : '敵将を討ち取った！') : COOP ? '味方の将がすべて討たれた…' : winTeam >= 0 ? `${TEAM_NAME[winTeam]}軍の勝利${elim[ME] && NT > 2 ? `（あなたは ${place[ME]}位）` : ''}` : '引き分け';
   $('ends').innerHTML = `${why}<br>戦闘時間 ${fmtT(gameT)} ／ あなたの撃破数 ${player.kills}`; $('spec').style.display = 'none'; $('end').style.display = 'flex';
 }
 
@@ -491,7 +540,7 @@ function startAttack(h) {
 }
 function heroTargets(h) {
   const W = h.W, range = W.range + (h.mounted ? 0.7 : 0), fx = Math.sin(h.face), fz = Math.cos(h.face), hits = [];
-  forNear(h.x, h.z, range + 0.5, o => { if (o.team === h.team || !o.alive) return; const dx = o.x - h.x, dz = o.z - h.z, d = Math.hypot(dx, dz);
+  forNear(h.x, h.z, range + 0.5, o => { if (ally(o.team, h.team) || !o.alive) return; const dx = o.x - h.x, dz = o.z - h.z, d = Math.hypot(dx, dz);
     if (d > range + radOf(o) * 0.5 || (dx * fx + dz * fz) / (d || 1) < W.cone || Math.abs(o.y - h.y) > (h.mounted ? 3.4 : 2.5)) return; hits.push([d, o]); });
   hits.sort((a, b) => a[0] - b[0]); return hits.slice(0, W.maxHits);
 }
@@ -537,8 +586,8 @@ function updatePlayer(dt) {
     const fx = Math.sin(h.face), fz = Math.cos(h.face); let sp = h.spd;
     if (Math.abs(sp) > 0.1) { const ah = H(h.x + fx * 2 * Math.sign(sp), h.z + fz * 2 * Math.sign(sp)); sp *= clamp(1 - (ah - h.y) / 2 * 0.7, 0.45, 1.15) * slowAt(h.x, h.z); }
     let vx = fx * sp, vz = fz * sp;
-    forNear(h.x, h.z, 2, o => { if (o === p) return; const sx = h.x - o.x, sz = h.z - o.z, sd = sx * sx + sz * sz, R = 0.95 + radOf(o); if (sd < R * R && sd > 1e-6) { const s = Math.sqrt(sd), k = (R - s) / R * (o.team === p.team ? 1 : 2.5); vx += sx / s * k; vz += sz / s * k;
-      if (o.team !== p.team && Math.abs(h.spd) > 7 && (o.trampleT || 0) < gameT && o.type !== 'hero') { o.trampleT = gameT + 0.8; dealDamage(p, o, 8 + Math.abs(h.spd) * 1.2, false); o.x -= sx / s * 1.4; o.z -= sz / s * 1.4; SFX.thud(o.x, o.z); } } });
+    forNear(h.x, h.z, 2, o => { if (o === p) return; const sx = h.x - o.x, sz = h.z - o.z, sd = sx * sx + sz * sz, R = 0.95 + radOf(o); if (sd < R * R && sd > 1e-6) { const s = Math.sqrt(sd), k = (R - s) / R * (ally(o.team, p.team) ? 1 : 2.5); vx += sx / s * k; vz += sz / s * k;
+      if (!ally(o.team, p.team) && Math.abs(h.spd) > 7 && (o.trampleT || 0) < gameT && o.type !== 'hero') { o.trampleT = gameT + 0.8; dealDamage(p, o, 8 + Math.abs(h.spd) * 1.2, false); o.x -= sx / s * 1.4; o.z -= sz / s * 1.4; SFX.thud(o.x, o.z); } } });
     h.x = clamp(h.x + vx * dt, -WALL, WALL); h.z = clamp(h.z + vz * dt, -WALL, WALL); if (phase === 'deploy') [h.x, h.z] = clampDeploy(ME, h.x, h.z); h.y = H(h.x, h.z);
     advanceHorse(h, dt);
     if (Math.abs(h.spd) > 8 && frameNo % 3 === 0) FX.dust(h.x - fx * 0.8, h.y + 0.2, h.z - fz * 0.8);
@@ -640,16 +689,17 @@ function updateHUD(dt) {
   const mine = squads.filter(s => s.team === ME && typeof s.num === 'number').sort((a, b) => ((a.num + 9) % 10) - ((b.num + 9) % 10));
   $('squads').innerHTML = mine.map(s => {
     const n = s.alive.length; const etas = msgs.filter(m => m.squad === s).map(m => Math.hypot(s.cx - m.x, s.cz - m.z) / MSG_SPEED);
-    const st = n ? (s.engaged > 0.2 ? '<span style="color:#f88">交戦中</span>' : MODE_JP[s.mode]) : '全滅';
+    const st = n ? (s.mode === 'flee' ? '<span style="color:#f86">潰走中</span>' : s.engaged > 0.2 ? '<span style="color:#f88">交戦中</span>' : MODE_JP[s.mode]) : '全滅';
+    const mo = n ? `<i class="mor" title="士気"><i style="width:${Math.round(s.mor)}%;background:${s.mor > 60 ? '#7c6' : s.mor > 30 ? '#db4' : '#e54'}"></i></i>` : '';
     const rf = s.reinfT ? ` <span style="color:#9cf">援軍${Math.max(0, Math.ceil(s.reinfT - gameT))}秒</span>` : '';
-    return `<div class="sq ${selected.has(s.num) ? 'sel' : ''} ${n ? '' : 'dead'}"><b>${s.num}</b> ${s.T.name} <span class="cnt">${n}/${s.full}</span> <span class="fm2">${FORMS[s.form].name}</span> ${st}${etas.length ? ` ✉${Math.ceil(Math.min(...etas))}秒` : ''}${rf}</div>`;
+    return `<div class="sq ${selected.has(s.num) ? 'sel' : ''} ${n ? '' : 'dead'}"><b>${s.num}</b> ${s.T.name} <span class="cnt">${n}/${s.full}</span> ${mo}<span class="fm2">${FORMS[s.form].name}</span> ${st}${etas.length ? ` ✉${Math.ceil(Math.min(...etas))}秒` : ''}${rf}</div>`;
   }).join('');
-  const armies = [...Array(NT).keys()].map(t => `<span style="color:${TEAM_CSS[t]};${elim[t] ? 'opacity:.4;text-decoration:line-through' : ''}">${TEAM_NAME[t]}${t === ME ? '(あなた)' : ''}</span>`).join(' ');
+  const armies = [...Array(NT).keys()].map(t => `<span style="color:${TEAM_CSS[t]};${elim[t] ? 'opacity:.4;text-decoration:line-through' : ''}">${TEAM_NAME[t]}${t === ME ? '(あなた)' : COOP && ally(t, ME) ? '(味方)' : ''}</span>`).join(' ');
   let o;
   if (phase === 'deploy') o = `<b style="color:#e8c77a">布陣</b>　開戦まで ${Math.ceil(deployT)}秒　<span style="font-size:12px">Tab の地図で部隊をドラッグして配置 ／ ${NET.mode === 'solo' ? 'Enter で開戦' : 'Enter で準備完了'}</span>`;
-  else if (zone) { const hd = zone.holder ?? -1; o = `敵将を討て ／ ${MAPS[MAP].zone ? (MAP === 'mesa' ? '中央台地' : '丘') : ''}：${hd >= 0 ? `<span style="color:${TEAM_CSS[hd]}">${TEAM_NAME[hd]}軍が確保</span>` : '争奪中'}`; }
-  else o = NT > 2 ? '乱戦　最後まで将が生き残った軍の勝ち' : '敵将を討ち取れ（敵軍の後方にいる）';
-  const al = ents.filter(e => e.team === ME && e.alive).length, seen = ents.filter(e => e.team !== ME && e.alive && e.seen).length;
+  else if (zone) { const hd = zone.holder ?? -1; o = `敵将を討て ／ ${MAPS[MAP].zone ? (MAP === 'mesa' ? '中央台地' : '丘') : ''}：${hd >= 0 ? `<span style="color:${TEAM_CSS[hd]}">${COOP ? (ally(hd, ME) ? '味方' : '敵') : TEAM_NAME[hd] + '軍'}が確保</span>` : '争奪中'}`; }
+  else o = COOP ? `協力戦　敵将をすべて討ち取れ${ODDS > 1 ? `（敵は${ODDS}倍）` : ''}` : NT > 2 ? '乱戦　最後まで将が生き残った軍の勝ち' : '敵将を討ち取れ（敵軍の後方にいる）';
+  const al = ents.filter(e => ally(e.team, ME) && e.alive).length, seen = ents.filter(e => !ally(e.team, ME) && e.alive && e.seen).length;
   $('obj').innerHTML = `${o}<br>${armies}　｜　味方 ${al}　見えている敵 ${seen}${spectate ? '　<span style="color:#9cf">観戦中（WASD・Space/C で移動）</span>' : ''}`;
   const h = horses[ME], near = h && !player.mounted && Math.hypot(player.x - h.x, player.z - h.z) < 3.5;
   $('hint').innerHTML = `<b>F</b> 照準へ移動 <b>C</b> 突撃 <b>H</b> 待機 <b>R</b> 集結 <b>G</b> 護衛 <b>T</b> 構え<br><b>Tab</b> 地図 <b>1-0</b> 部隊 <b>@</b> 全部隊 <b>V</b> 視点 <b>E</b> ${player.mounted ? '下馬' : '乗馬'}<br><b>Q</b>＋数字 陣形（横隊・一列・縦隊・方陣・楔形・散開・盾壁）`;
@@ -830,7 +880,7 @@ function initRender() {
   grassIM = new THREE.InstancedMesh(gg, windMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 1 }), 0.12), 9000); grassIM.frustumCulled = false; grassIM.receiveShadow = true; scene.add(grassIM);
   // 木と岩（シード固定なので全員で同じ配置）。陣地の中には生やさない
   seed = 12345; const trees = []; const nT = { mountain: 1100, hill: 450, forest: 2200, mesa: 70, snow: 650, river: 420 }[MAP] || 300;
-  const inCamp = (x, z, m) => { for (let t = 0; t < NT; t++) { const [lx, d] = toFrame(t, x, z), Z = zoneDims(); if (Math.abs(lx) < Z.w + m && d > Z.d0 - m - 40 && d < Z.d1 + m) return true; } return false; };
+  const inCamp = (x, z, m) => { for (let t = 0; t < NT; t++) { const [lx, d] = toFrame(t, x, z), Z = zoneDims(t); if (Math.abs(lx) < Z.w + m && d > Z.d0 - m - 40 && d < Z.d1 + m) return true; } return false; };
   for (let i = 0; i < nT * 4 && trees.length < nT; i++) { const x = (rnd() - 0.5) * 560, z = (rnd() - 0.5) * 560;
     if (inCamp(x, z, MAP === 'mountain' ? 4 : 10)) continue;
     if (zone && Math.hypot(x - zone.x, z - zone.z) < zone.r + 6) continue;
@@ -978,7 +1028,7 @@ function render(dt) {
   frameNo++; windU.value += dt; CLOTH_TIME.value = windU.value;
   updateViewmodel(dt); updateCamera(dt); FX.update(dt);
   const spMe = spotters(ME), cp = camera.position, cdir = new THREE.Vector3(); camera.getWorldDirection(cdir);
-  const all = spectate || elim[ME]; for (const e of ents) if (e.team !== ME) e.seen = e.alive && (all || canSee(spMe, e));
+  const all = spectate || elim[ME]; for (const e of ents) if (e.team !== ME) e.seen = e.alive && (all || ally(e.team, ME) || canSee(spMe, e));
   // 兵士
   for (const e of ents) {
     if (e.type === 'hero') continue; const C = crowds[e.team], i = e.ci, dead = !e.alive;
@@ -1011,7 +1061,7 @@ function render(dt) {
   for (let i = ai; i < 800; i++) IMarrow.setMatrixAt(i, ZERO); IMarrow.instanceMatrix.needsUpdate = true;
   // 伝令（騎馬）
   const mi = new Array(NT).fill(0);
-  for (const m of msgs) { const t = m.team; if (mi[t] >= 60) continue; if (t !== ME && !all && !canSee(spMe, m)) continue;
+  for (const m of msgs) { const t = m.team; if (mi[t] >= 60) continue; if (!ally(t, ME) && !all && !canSee(spMe, m)) continue;
     const fe = { id: mi[t], x: m.x, y: m.y ?? H(m.x, m.z), z: m.z, face: m.face || 0, spd: 13, phase: 0, anim: 0, alive: true, mounted: true, swing: 'couch', wpn: 'none', light: false };
     const fh = { x: fe.x, y: fe.y, z: fe.z, face: fe.face, spd: 13, cyc: m.cyc || 0, gait: 3, alive: true };
     computePose(fe, P, O, fh, windU.value); msgCrowds[t].write(mi[t]++, fe, O, fh); }
@@ -1062,21 +1112,20 @@ function drawMap() {
   ctx.drawImage(fogC, 0, 0);
   const poly = (pts, stroke, fill, dash) => { ctx.beginPath(); pts.forEach(([x, z], i) => { const [u, v] = toMap(x, z); i ? ctx.lineTo(u, v) : ctx.moveTo(u, v); }); ctx.closePath(); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.setLineDash(dash || []); ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]); } };
   // 各軍の陣地（布陣中は自分の陣地を明るく）
-  const Z = zoneDims();
-  for (let t = 0; t < NT; t++) { const pts = [[-Z.w, Z.d0], [Z.w, Z.d0], [Z.w, Z.d1], [-Z.w, Z.d1]].map(([l, d]) => fw(t, l, d));
+  for (let t = 0; t < NT; t++) { const Z = zoneDims(t), pts = [[-Z.w, Z.d0], [Z.w, Z.d0], [Z.w, Z.d1], [-Z.w, Z.d1]].map(([l, d]) => fw(t, l, d));
     if (t === ME && phase === 'deploy') poly(pts, '#ffe080', 'rgba(255,224,128,.12)', [6, 4]); else poly(pts, elim[t] ? 'rgba(120,120,120,.4)' : TEAM_CSS[t] + '88', null, [3, 5]);
-    const [u, v] = toMap(...fw(t, 0, Z.d1 * 0.5)); ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = elim[t] ? '#888' : TEAM_CSS[t]; ctx.fillText(`${TEAM_NAME[t]}軍${t === ME ? '（自陣）' : ''}`, u, v); }
+    const [u, v] = toMap(...fw(t, 0, Z.d1 * 0.5)); ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = elim[t] ? '#888' : TEAM_CSS[t]; ctx.fillText(`${TEAM_NAME[t]}軍${t === ME ? '（自陣）' : COOP && ally(t, ME) ? '（味方）' : ''}`, u, v); }
   if (zone) { const [u, v] = toMap(zone.x, zone.z); ctx.strokeStyle = zone.holder >= 0 ? TEAM_CSS[zone.holder] : '#ffe080'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(u, v, zone.r * S / 600, 0, 7); ctx.stroke(); }
-  for (const e of ents) { if (!e.alive || e.gone) continue; if (e.team !== ME && !e.seen) continue; const [u, v] = toMap(e.x, e.z); ctx.fillStyle = e.type === 'hero' ? (e.team === ME ? '#fff' : '#ffd040') : TEAM_CSS[e.team]; ctx.fillRect(u - 1.2, v - 1.2, 2.4, 2.4); }
+  for (const e of ents) { if (!e.alive || e.gone) continue; if (e.team !== ME && !e.seen) continue; const [u, v] = toMap(e.x, e.z); ctx.fillStyle = e.type === 'hero' ? (e.team === ME ? '#fff' : ally(e.team, ME) ? '#9ef' : '#ffd040') : TEAM_CSS[e.team]; ctx.fillRect(u - 1.2, v - 1.2, 2.4, 2.4); }
   ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const s of squads) { if (!s.alive.length) continue;
     if (s.team === ME) { const sel = selected.has(s.num), [cu, cv] = toMap(s.cx, s.cz);
       if (s.mode !== 'hold' && s.mode !== 'follow' && phase !== 'deploy') { const [tu, tv] = toMap(s.tx, s.tz); ctx.setLineDash([4, 4]); ctx.strokeStyle = s.mode === 'charge' ? '#f66' : '#cde'; ctx.beginPath(); ctx.moveTo(cu, cv); ctx.lineTo(tu, tv); ctx.stroke(); ctx.setLineDash([]); }
       const [fu, fv] = toMap(s.cx + Math.sin(s.face) * 12, s.cz + Math.cos(s.face) * 12); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cu, cv); ctx.lineTo(fu, fv); ctx.stroke(); ctx.lineWidth = 1;
-      ctx.fillStyle = sel ? '#f0c030' : TEAM_BG[ME]; ctx.fillRect(cu - 17, cv - 20, 34, 15); ctx.fillStyle = '#fff'; ctx.fillText(`${s.num}${s.T.label}${s.mode === 'follow' ? '護' : ''}`, cu, cv - 12);
+      ctx.fillStyle = sel ? '#f0c030' : s.mode === 'flee' ? 'rgba(200,60,40,.9)' : TEAM_BG[ME]; ctx.fillRect(cu - 17, cv - 20, 34, 15); ctx.fillStyle = '#fff'; ctx.fillText(`${s.num}${s.T.label}${s.mode === 'follow' ? '護' : ''}`, cu, cv - 12);
     } else { const v = s.alive.filter(m => m.seen); if (!v.length) continue; let x = 0, z = 0; for (const m of v) { x += m.x; z += m.z; } const [u, w] = toMap(x / v.length, z / v.length);
       ctx.fillStyle = TEAM_BG[s.team]; ctx.fillRect(u - 10, w - 20, 20, 15); ctx.fillStyle = '#fff'; ctx.fillText(s.T.label, u, w - 12); } }
-  for (const m of msgs) { if (m.team !== ME && !all && !canSee(spMe, m)) continue; const [u, v] = toMap(m.x, m.z);
+  for (const m of msgs) { if (!ally(m.team, ME) && !all && !canSee(spMe, m)) continue; const [u, v] = toMap(m.x, m.z);
     if (m.team === ME) { const [su, sv] = toMap(m.squad.cx, m.squad.cz); ctx.strokeStyle = 'rgba(255,230,80,.5)'; ctx.beginPath(); ctx.moveTo(u, v); ctx.lineTo(su, sv); ctx.stroke(); }
     ctx.fillStyle = m.team === ME ? '#ffe050' : '#ff9030'; ctx.beginPath(); ctx.arc(u, v, 3.5, 0, 7); ctx.fill(); }
   const hz = horses[ME]; if (hz && !player.mounted) { const [u, v] = toMap(hz.x, hz.z); ctx.fillStyle = '#ffe9a0'; ctx.font = 'bold 16px serif'; ctx.fillText('♞', u, v); }
@@ -1218,16 +1267,16 @@ const Q = 50, PHASES = ['deploy', 'battle'];
 function packSnap() {
   const evB = new TextEncoder().encode(JSON.stringify(NET.outEv.slice(-40)));
   const n = ents.length, ns = squads.length, nm = Math.min(msgs.length, 255), na = Math.min(NET.newArrows.length, 1000);
-  const buf = new ArrayBuffer(40 + NT * 30 + n * 7 + ns * 14 + nm * 6 + na * 12 + evB.length), dv = new DataView(buf); let o = 0;
+  const buf = new ArrayBuffer(40 + NT * 30 + n * 7 + ns * 15 + nm * 6 + na * 12 + evB.length), dv = new DataView(buf); let o = 0;
   const u8 = v => dv.setUint8(o++, v), u16 = v => { dv.setUint16(o, clamp(v, 0, 65535)); o += 2; }, i16 = v => { dv.setInt16(o, clamp(Math.round(v), -32767, 32767)); o += 2; }, f32 = v => { dv.setFloat32(o, v); o += 4; }, u32 = v => { dv.setUint32(o, v); o += 4; };
-  u8(87); u8(4); u32(++NET.lastSnapSeq); f32(gameT); u8(PHASES.indexOf(phase)); f32(deployT); u8(NT); u8(zone ? (zone.holder ?? -1) + 1 : 0);
+  u8(87); u8(5); u32(++NET.lastSnapSeq); f32(gameT); u8(PHASES.indexOf(phase)); f32(deployT); u8(NT); u8(zone ? (zone.holder ?? -1) + 1 : 0);
   for (let t = 0; t < NT; t++) { const h = horses[t] || { x: 0, z: 0, face: 0, spd: 0 }, g = NET.gin[t] || {};
     u16(Math.ceil(heroes[t].hp)); u16(heroes[t].kills); u8((elim[t] ? 1 : 0) | (ready.has(t) ? 2 : 0)); u8(place[t] || 0);
     i16(h.x * Q); i16(h.z * Q); i16(h.face % (Math.PI * 2) * 5000); i16(h.spd * 100); u32(g.ack || 0); u32(g.echo || 0); }
   u16(n);
   for (const e of ents) { i16(e.x * Q); i16(e.z * Q); dv.setInt8(o++, Math.round(((e.face % (Math.PI * 2)) + Math.PI * 3) % (Math.PI * 2) / (Math.PI * 2) * 250) - 125);
     u8((e.alive ? 1 : 0) | (e.anim > 0.05 ? 2 : 0) | (e.blocking ? 8 : 0) | (e.mounted ? 16 : 0) | (e.gone ? 32 : 0) | (e.rout ? 64 : 0)); u8(Math.round(clamp(e.hp / e.T.hp, 0, 1) * 255)); }
-  u8(ns); for (const s of squads) { i16(s.ax * Q); i16(s.az * Q); i16(s.tx * Q); i16(s.tz * Q); i16(s.face * 5000); u8(MODES.indexOf(s.mode)); u8(Math.max(0, s.pending)); u8(Math.round(clamp(s.engaged, 0, 1) * 255)); u8(FORM_IDS.indexOf(s.form)); u8(s.reinfT ? clamp(Math.ceil(s.reinfT - gameT), 1, 255) : 0); }
+  u8(ns); for (const s of squads) { i16(s.ax * Q); i16(s.az * Q); i16(s.tx * Q); i16(s.tz * Q); i16(s.face * 5000); u8(MODES.indexOf(s.mode)); u8(Math.max(0, s.pending)); u8(Math.round(clamp(s.engaged, 0, 1) * 255)); u8(FORM_IDS.indexOf(s.form)); u8(s.reinfT ? clamp(Math.ceil(s.reinfT - gameT), 1, 255) : 0); u8(Math.round(clamp(s.mor, 0, 100))); }
   u8(nm); for (let i = 0; i < nm; i++) { const m = msgs[i]; u8(m.team); u8(m.squad.idx); i16(m.x * Q); i16(m.z * Q); }
   u16(na); for (let i = 0; i < na; i++) { const a = NET.newArrows[i]; i16(a.x * Q); i16(a.y * Q); i16(a.z * Q); i16(a.vx * 100); i16(a.vy * 100); i16(a.vz * 100); }
   u16(evB.length); new Uint8Array(buf, o, evB.length).set(evB);
@@ -1236,7 +1285,7 @@ function packSnap() {
 function recvSnap(p) {
   const dv = new DataView(p.buffer, p.byteOffset, p.byteLength); let o = 0;
   const u8 = () => dv.getUint8(o++), u16 = () => { const v = dv.getUint16(o); o += 2; return v; }, i16 = () => { const v = dv.getInt16(o); o += 2; return v; }, f32 = () => { const v = dv.getFloat32(o); o += 4; return v; }, u32 = () => { const v = dv.getUint32(o); o += 4; return v; };
-  if (u8() !== 87 || u8() !== 4) return;
+  if (u8() !== 87 || u8() !== 5) return;
   const seq = u32(); if (seq <= NET.lastSnapSeq) return; NET.lastSnapSeq = seq;
   gameT = f32(); const ph = PHASES[u8()] || 'battle'; deployT = f32(); const nt = u8(); const zh = u8() - 1; if (zone) zone.holder = zh;
   if (ph !== phase) { phase = ph; if (ph === 'battle') beginBattleLocal(); }
@@ -1261,8 +1310,8 @@ function recvSnap(p) {
     e.hp = hpb / 255 * e.T.hp; }
   const myHp = heroes[ME].hp; if (myHp < (NET.lastHp ?? myHp)) hurtFx(NET.lastHp - myHp); NET.lastHp = myHp;
   NET.snapT = now;
-  const ns = u8(); for (let i = 0; i < ns; i++) { const s = squads[i]; const ax = i16() / Q, az = i16() / Q, tx = i16() / Q, tz = i16() / Q, face = i16() / 5000, mode = MODES[u8()] || 'hold', pend = u8(), eng = u8() / 255, form = FORM_IDS[u8()] || 'line', rf = u8();
-    s.reinfT = rf ? gameT + rf : 0; s.pending = pend; s.engaged = eng; if (deploying && s.team === ME) continue;
+  const ns = u8(); for (let i = 0; i < ns; i++) { const s = squads[i]; const ax = i16() / Q, az = i16() / Q, tx = i16() / Q, tz = i16() / Q, face = i16() / 5000, mode = MODES[u8()] || 'hold', pend = u8(), eng = u8() / 255, form = FORM_IDS[u8()] || 'line', rf = u8(), mor = u8();
+    s.reinfT = rf ? gameT + rf : 0; s.pending = pend; s.engaged = eng; s.mor = mor; if (deploying && s.team === ME) continue;
     Object.assign(s, { ax, az, tx, tz, face, mode, form }); }
   const nm = u8(); msgs.length = 0; for (let i = 0; i < nm; i++) { const team = u8(), si = u8(), x = i16() / Q, z = i16() / Q; const s = squads[si]; msgs.push({ team, squad: s, x, z, y: H(x, z), face: Math.atan2(s.cx - x, s.cz - z), cyc: now / 440 }); }
   const na = u16(); for (let i = 0; i < na; i++) arrows.push({ x: i16() / Q, y: i16() / Q, z: i16() / Q, vx: i16() / 100, vy: i16() / 100, vz: i16() / 100, stuck: 0 });
@@ -1296,7 +1345,7 @@ function recvInput(s, id) {
     if (!Array.isArray(ev) || ev[0] <= G.ack) continue; G.ack = ev[0];
     if (ev[1] === 'a' && e.alive && running && phase === 'battle') { startAttack(e); e.hitAt = 0; }
     else if (ev[1] === 'h' && e.alive && running && phase === 'battle') { // ゲストの画面で当たった相手（距離だけ確かめる）
-      const hits = []; for (const id2 of ev.slice(2)) { const v = ents[id2 | 0]; if (v && v.alive && v.team !== t && Math.hypot(v.x - e.x, v.z - e.z) < e.W.range + 4.5) hits.push([Math.hypot(v.x - e.x, v.z - e.z), v]); }
+      const hits = []; for (const id2 of ev.slice(2)) { const v = ents[id2 | 0]; if (v && v.alive && !ally(v.team, t) && Math.hypot(v.x - e.x, v.z - e.z) < e.W.range + 4.5) hits.push([Math.hypot(v.x - e.x, v.z - e.z), v]); }
       heroAttack(e, hits.slice(0, e.W.maxHits)); }
     else if (ev[1] === 'o' && running && phase === 'battle') { const sq = squads[ev[2] | 0]; if (sq && sq.team === t && MODES.includes(ev[3])) sendOrder(t, sq, { mode: ev[3], x: clamp(+ev[4] || 0, -WALL, WALL), z: clamp(+ev[5] || 0, -WALL, WALL), form: FORMS[ev[6]] ? ev[6] : undefined, face: typeof ev[7] === 'number' ? ev[7] : undefined }); }
     else if (ev[1] === 'd' && phase === 'deploy') { const sq = squads[ev[2] | 0]; if (sq && sq.team === t) { [sq.ax, sq.az] = clampDeploy(t, +ev[3] || 0, +ev[4] || 0); sq.face = +ev[5] || 0; sq.form = FORM_IDS[ev[6] | 0] || 'line'; sq.mode = ev[7] ? 'follow' : 'hold'; sq.escort = !!ev[7]; sq.tx = sq.ax; sq.tz = sq.az; sq.snap(); } }
@@ -1362,7 +1411,7 @@ function step(dt) {
   for (const h of heroes) if (h.alive && !h.squad && gameT - h.lastHurt > 5 && h.hp < h.T.hp) h.hp = Math.min(h.T.hp, h.hp + 10 * dt);
   updateArrows(dt); updateMsgs(dt);
   aiTimer -= dt; if (aiTimer <= 0) { aiTimer = 4; for (const t of aiTeams) aiThink(t); }
-  objectives(dt);
+  moraleTick(dt); objectives(dt);
 }
 function frame(dt) {
   if (running) { if (NET.mode === 'guest') guestTick(dt); else step(dt); }
@@ -1380,7 +1429,12 @@ function startGame(cfg) {
   MAP = MAPS[cfg.map] ? cfg.map : 'hill'; SIZE = cfg.size; NET.mode = cfg.mode; NT = clamp(cfg.nt | 0 || 2, 2, MAP === 'mountain' ? 2 : 5);
   const players = cfg.players || [NET.myId]; ME = cfg.mode === 'guest' ? players.indexOf(NET.myId) : 0;
   NET.players = players; players.forEach((id, t) => NET.teamOf.set(id, t));
-  TEAM_A = [...Array(NT).keys()].map(t => t * Math.PI * 2 / NT);
+  TEAM_A = [...Array(NT).keys()].map(t => t * Math.PI * 2 / NT); SIDE = [...Array(NT).keys()]; TEAM_OFF = []; ZW = [];
+  COOP = !!cfg.coop; ODDS = COOP ? clamp(+cfg.odds || 1, 1, 3) : 1;
+  if (COOP) { // 協力戦：味方の軍を北側に横並び、敵の軍を南側に横並び
+    const A = clamp(cfg.allies | 0 || 1, 1, NT - 1);
+    for (let t = 0; t < NT; t++) { const mine = t < A, k = mine ? A : NT - A, i = mine ? t : t - A, w = k === 1 ? 125 : (250 - 14 * (k - 1)) / k / 2;
+      SIDE[t] = mine ? 0 : A; TEAM_A[t] = mine ? 0 : Math.PI; TEAM_OFF[t] = (i - (k - 1) / 2) * (2 * w + 14) * (mine ? 1 : -1); ZW[t] = w; } }
   const los = cfg.los || [];
   for (let t = 0; t < NT; t++) { const lo = los[t] || (t === 0 ? LO : cpuLoadout()); los[t] = lo; teamArmor[t] = lo.army; heroArmor[t] = lo.self; heroWpn[t] = lo.wpn; elim[t] = false; }
   zone = MAPS[MAP].zone ? { ...MAPS[MAP].zone, holder: -1 } : null;
@@ -1395,13 +1449,14 @@ function startGame(cfg) {
     NET.tickIv = setInterval(netTick, SNAP_MS);
   }
   log(`あなたは${TEAM_NAME[ME]}軍の将。いまは布陣の時間：Tab の地図で部隊をドラッグして配置、陣形と護衛を決めて ${cfg.mode === 'solo' ? 'Enter で開戦' : 'Enter で準備完了'}`, '#e8c77a');
-  for (let t = 0; t < NT; t++) if (t !== ME) log(`${TEAM_NAME[t]}軍${aiTeams.has(t) ? '（CPU）' : ''}：${ARMORS[teamArmor[t]].name}　将：${ARMORS[heroArmor[t]].name}・${WEAPONS[heroWpn[t]].name}`, TEAM_CSS[t]);
+  if (COOP) log(`協力戦：${SIDE.slice(0, NT).filter(x => x === 0).length}軍 対 ${SIDE.slice(0, NT).filter(x => x !== 0).length}軍${ODDS > 1 ? `　敵の兵力は${ODDS}倍。正面からでは勝てない。森の伏兵・側面や背後への突撃・敵将の首で崩せ` : ''}`, '#fd8');
+  for (let t = 0; t < NT; t++) if (t !== ME) log(`${TEAM_NAME[t]}軍${COOP ? (ally(t, ME) ? '【味方】' : '【敵】') : ''}${aiTeams.has(t) ? '（CPU）' : ''}：${ARMORS[teamArmor[t]].name}　将：${ARMORS[heroArmor[t]].name}・${WEAPONS[heroWpn[t]].name}`, TEAM_CSS[t]);
   if (TEST && params.has('fight')) startBattle(); else openMap(true);
   if (!TEST && !mapOpen) { try { $('gl').requestPointerLock()?.catch?.(() => {}); } catch (e) {} }
   clock.getDelta(); if (!TEST || !params.has('manual')) setTimeout(loop, 0);
   window.G = { ents, squads, msgs, arrows, step, frame, heroes, horses, NET, sendOrder, openMap, selected, orderSelected, orderFormation, issueOrder, playerAttack, tryMount, keys, FORMS, dealDamage, elim, startBattle, pressReady, deployApply, teamFrame, fw, zoneDims, aiTeams, human,
     get player() { return player }, get gameT() { return gameT }, get ME() { return ME }, get ended() { return ended }, get phase() { return phase }, get deployT() { return deployT }, ready, frameNo: () => frameNo, get NT() { return NT }, get zone() { return zone },
-    set spectate(v) { spectate = v; }, view(o) { if (o.yaw !== undefined) yaw = o.yaw; if (o.pitch !== undefined) pitch = o.pitch; if (o.tp !== undefined) thirdPerson = o.tp; },
+    set spectate(v) { spectate = v; }, get SIDE() { return SIDE }, get COOP() { return COOP }, breakSquad, moraleTick, view(o) { if (o.yaw !== undefined) yaw = o.yaw; if (o.pitch !== undefined) pitch = o.pitch; if (o.tp !== undefined) thirdPerson = o.tp; },
     async shot(name) { frame(0.016); if (mapOpen) drawMap(); const url = (mapOpen && params.has('mapshot') ? mapC : renderer.domElement).toDataURL('image/png'); return (await fetch('/shot?name=' + name, { method: 'POST', body: url })).text(); } };
 }
 
@@ -1461,7 +1516,7 @@ function renderArmory() {
     : `<h3>${A.name}<small>${A.era}</small></h3><p>${A.desc}</p><p class="stat">被ダメージ ×${A.def}　移動 ×${A.spd}</p><h3>${W.name}</h3><p>${W.desc}</p><p class="stat">威力 ${W.dmg}　間合い ${W.range}m　振り ${W.cd}秒　最大 ${W.maxHits}人${W.shield ? '　盾あり' : ''}</p>`;
 }
 function renderComp() {
-  const mul = SIZE_SEL() * (NT_SEL() <= 2 ? 1 : 2.3 / NT_SEL()); let tot = 0;
+  const mul = menuMul(true); let tot = 0;
   $('compList').innerHTML = LO.comp.map((q, i) => { const T = q && TYPES[q.t], n = T ? Math.max(4, Math.round(T.n * mul)) : 0; tot += n;
     return `<div class="crow"><b>${(i + 1) % 10}</b><select data-i="${i}"><option value="">― なし ―</option>${COMP_TYPES.map(k => `<option value="${k}" ${q && q.t === k ? 'selected' : ''}>${TYPES[k].name}</option>`).join('')}</select>
       <label><input type="checkbox" data-e="${i}" ${q && q.esc ? 'checked' : ''} ${T ? '' : 'disabled'}> 護衛</label><span class="cn">${T ? n + '人' : ''}</span></div>`; }).join('');
@@ -1471,18 +1526,30 @@ function renderComp() {
   $('loSummary').textContent = `自分：${ARMORS[LO.self].name}・${WEAPONS[LO.wpn].name}　自軍：${ARMORS[LO.army].name}　編成：${LO.comp.filter(q => q && TYPES[q.t]).map(q => TYPES[q.t].label).join('')}`;
 }
 const SIZE_SEL = () => +(document.querySelector('#sizes .on')?.dataset.size || 2), NT_SEL = () => +(document.querySelector('#teams .on')?.dataset.nt || 2);
+const SELV = (id, k, d) => +(document.querySelector(`#${id} .on`)?.dataset[k] || d), COOP_SEL = () => document.querySelector('#kinds .on')?.dataset.k === 'coop';
+// メニューで選んでいる設定での1軍の人数の倍率（mine=自分の軍、false=敵の軍）
+function menuMul(mine) {
+  if (!COOP_SEL()) return SIZE_SEL() * (NT_SEL() <= 2 ? 1 : 2.3 / NT_SEL());
+  const A = SELV('allies', 'n', 1), tot = SIZE_SEL() * (A <= 1 ? 1 : 1.3); return mine ? tot / A : tot * SELV('odds', 'x', 1) / SELV('foes', 'n', 1);
+}
 // 軍の数と戦場の組み合わせ（山岳は2軍だけ、オンラインは人数以上）
 function syncTeamOpts() {
   const map = document.querySelector('#maps .on')?.dataset.map || 'hill', max = MAPS[map].max, min = NET.tr && document.querySelector('#modes .on')?.dataset.mode === 'online' ? Math.max(2, NET.lobbyN || 2) : 2;
   let cur = NT_SEL(); $('teams').querySelectorAll('.opt').forEach(o => o.classList.toggle('dis', +o.dataset.nt > max || +o.dataset.nt < min));
   if (cur > max || cur < min) { cur = clamp(cur, min, max); $('teams').querySelectorAll('.opt').forEach(o => o.classList.toggle('on', +o.dataset.nt === cur)); }
+  const coop = COOP_SEL(); $('coopBox').style.display = coop ? 'block' : 'none'; $('teams').style.display = $('teamsLbl').style.display = coop ? 'none' : '';
+  if (coop) { // 味方は人数以上、味方＋敵は戦場の上限まで
+    const setRow = (id, lo, hi) => { let v = SELV(id, 'n', 1); const opts = $(id).querySelectorAll('.opt'); opts.forEach(o => o.classList.toggle('dis', +o.dataset.n < lo || +o.dataset.n > hi));
+      if (v < lo || v > hi) { v = clamp(v, lo, Math.max(lo, hi)); opts.forEach(o => o.classList.toggle('on', +o.dataset.n === v)); } return v; };
+    const online = NET.tr && document.querySelector('#modes .on')?.dataset.mode === 'online', a = setRow('allies', online ? Math.min(4, NET.lobbyN || 1) : 1, Math.min(4, max - 1));
+    setRow('foes', 1, max - a); }
   $('mapDesc').textContent = MAPS[map].d + (max < 5 ? `（${max}軍まで）` : '');
-  const per = Math.round(LO.comp.reduce((t, q) => t + (q && TYPES[q.t] ? Math.max(4, Math.round(TYPES[q.t].n * SIZE_SEL() * (cur <= 2 ? 1 : 2.3 / cur))) : 0), 0));
-  $('sizeNote').textContent = `1軍 約${per}人 × ${cur}軍`;
+  const per = m => Math.round(LO.comp.reduce((t, q) => t + (q && TYPES[q.t] ? Math.max(4, Math.round(TYPES[q.t].n * m)) : 0), 0));
+  $('sizeNote').textContent = coop ? `味方 約${per(menuMul(true))}人 × ${SELV('allies', 'n', 1)}軍　対　敵 約${per(menuMul(false))}人 × ${SELV('foes', 'n', 1)}軍` : `1軍 約${per(menuMul(true))}人 × ${cur}軍`;
 }
 function setupMenu() {
   $('maps').innerHTML = Object.entries(MAPS).map(([k, m], i) => `<div class="opt ${i === 0 ? 'on' : ''}" data-map="${k}">${m.name}</div>`).join('');
-  for (const g of ['maps', 'sizes', 'teams']) $(g).addEventListener('click', e => { const o = e.target.closest('.opt'); if (!o || o.classList.contains('dis')) return; $(g).querySelectorAll('.opt').forEach(x => x.classList.remove('on')); o.classList.add('on'); syncTeamOpts(); renderComp(); });
+  for (const g of ['maps', 'sizes', 'teams', 'kinds', 'allies', 'foes', 'odds']) $(g).addEventListener('click', e => { const o = e.target.closest('.opt'); if (!o || o.classList.contains('dis')) return; $(g).querySelectorAll('.opt').forEach(x => x.classList.remove('on')); o.classList.add('on'); syncTeamOpts(); renderComp(); });
   $('modes').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) setMode(o.dataset.mode); });
   $('tabs').addEventListener('click', e => { const o = e.target.closest('.tab'); if (!o) return; $('tabs').querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === o));
     $('pageBattle').style.display = o.dataset.p === 'battle' ? 'block' : 'none'; $('pageArmy').style.display = o.dataset.p === 'army' ? 'block' : 'none'; $('pageArmory').style.display = o.dataset.p === 'armory' ? 'grid' : 'none';
@@ -1503,14 +1570,16 @@ function setupMenu() {
   renderComp(); syncTeamOpts();
 }
 function onGo() {
-  const map = document.querySelector('#maps .on').dataset.map, size = SIZE_SEL(), nt = NT_SEL();
+  const map = document.querySelector('#maps .on').dataset.map, size = SIZE_SEL(), coop = COOP_SEL(), allies = SELV('allies', 'n', 1), odds = SELV('odds', 'x', 1);
+  const nt = coop ? allies + SELV('foes', 'n', 1) : NT_SEL(), cc = coop ? { coop: 1, allies, odds } : {};
   const mode = document.querySelector('#modes .on').dataset.mode;
-  if (mode === 'solo') return startGame({ map, size, nt, mode: 'solo' });
+  if (mode === 'solo') return startGame({ map, size, nt, mode: 'solo', ...cc });
   if (!NET.isHost) return;
   const players = lobbyIds().slice(0, MAX_P), n = Math.max(nt, players.length);
+  if (coop && players.length > allies) { status('協力戦：味方の軍の数を人数以上にしてね'); return; }
   const los = []; for (let t = 0; t < n; t++) los.push(t === 0 ? LO : t < players.length ? ((NET.peers.get(players[t]) || {}).p?.lo || LO_DEF) : cpuLoadout());
   const broker = pickBroker([NET.tr.rtts(), ...players.slice(1).map(id => (NET.peers.get(id) || {}).p?.rtt)]);
-  const go = { map, size, nt: n, t: Date.now(), players, los, broker };
+  const go = { map, size, nt: n, t: Date.now(), players, los, broker, ...cc };
   NET.pres = { go, lo: LO }; NET.tr.pub('p/' + NET.myId, JSON.stringify(NET.pres));
   setTimeout(() => { NET.tr.pub('p/' + NET.myId, JSON.stringify(NET.pres)); if (broker) { NET.tr.use(broker); NET.via = broker; } }, 1200);
   startGame({ ...go, mode: 'host' });
@@ -1524,7 +1593,8 @@ function setMode(m) {
   syncTeamOpts();
 }
 setupMenu();
+if (TEST && params.get('kind')) document.querySelector(`#kinds [data-k=${params.get('kind')}]`)?.click();
 if (params.get('room')) { setMode('online'); $('room').value = params.get('room'); joinRoom(); }
-else if (TEST && params.get('map')) { if (params.get('lo')) Object.assign(LO, JSON.parse(params.get('lo'))); startGame({ map: params.get('map'), size: +(params.get('size') || 2), nt: +(params.get('nt') || 2), mode: 'solo' }); }
+else if (TEST && params.get('map')) { if (params.get('lo')) Object.assign(LO, JSON.parse(params.get('lo'))); startGame({ map: params.get('map'), size: +(params.get('size') || 2), nt: +(params.get('nt') || 2), mode: 'solo', coop: params.has('coop'), allies: +params.get('coop') || 1, odds: +(params.get('odds') || 1) }); }
 else if (TEST && params.get('armory')) { $('tabs').querySelector('[data-p=armory]').click(); }
 window.WARLORD = { get PV() { return PV; }, renderArmory, rebuildPreview, pvFrame, LO };

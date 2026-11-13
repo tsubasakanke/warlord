@@ -4,5 +4,5 @@
 <script>
 // ?n=3 で3人。?net=real で本物のリレーを使う。最初の枠がホスト（n人そろったら自動で開戦）
 const q=new URLSearchParams(location.search);const room=q.get('room')||('T'+Math.random().toString(36).slice(2,6).toUpperCase());const net=q.get('net')||'mock', n=+(q.get('n')||2);
-let h=''; for(let i=0;i<n;i++) h+=`<iframe id="f${i}" style="width:${n<=2?50:33}vw" src="index.html?test=1${i===0?'&autogo='+n:''}&room=${room}${net==='real'?'':'&net=mock'}"></iframe>`; document.write(h);
+let h=''; for(let i=0;i<n;i++) h+=`<iframe id="f${i}" style="width:${n<=2?50:33}vw" src="index.html?test=1${i===0?'&autogo='+n+(q.get('kind')?'&kind='+q.get('kind'):''):''}&room=${room}${net==='real'?'':'&net=mock'}"></iframe>`; document.write(h);
 </script>

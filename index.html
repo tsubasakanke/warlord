@@ -82,6 +82,7 @@ kbd{background:#33281a;border:1px solid #6a5a3a;border-radius:3px;padding:0 5px;
 #formBar button{font-family:inherit;font-size:12px;padding:3px 8px;background:#2a2014;color:#f0e2c0;border:1px solid #8a6a34;border-radius:3px;cursor:pointer}
 #formBar button:hover{background:#5e4318}
 .sq .fm2{font-size:11px;color:#a8c0d8;margin:0 3px}
+.sq .mor{display:inline-block;width:34px;height:5px;background:rgba(0,0,0,.5);vertical-align:middle;margin:0 3px;border-radius:2px;overflow:hidden}.sq .mor i{display:block;height:100%}
 #mapDesc{font-size:12px;color:#a8977a;margin:-4px 0 6px}
 .crow{display:flex;align-items:center;gap:10px;padding:4px 8px;border-bottom:1px solid #3a2e1c}
 .crow b{width:20px;color:#f0d08a;font-size:18px;text-align:center}
@@ -107,7 +108,7 @@ kbd{background:#33281a;border:1px solid #6a5a3a;border-radius:3px;padding:0 5px;
     <div class="lbl">対戦</div>
     <div class="row" id="modes">
       <div class="opt on" data-mode="solo">ソロ（CPUの将と対戦）</div>
-      <div class="opt" data-mode="online">オンライン対戦（2〜5人）</div>
+      <div class="opt" data-mode="online">オンライン（2〜5人・対戦も協力も）</div>
     </div>
     <div id="onlineBox">
       部屋コード <input id="room" maxlength="8"> <button class="btn" id="join">部屋に入る</button>
@@ -117,7 +118,21 @@ kbd{background:#33281a;border:1px solid #6a5a3a;border-radius:3px;padding:0 5px;
     <div class="lbl">戦場 <span id="cfgnote" style="color:#998;font-size:12px;font-weight:400"></span></div>
     <div class="row" id="maps"></div>
     <div id="mapDesc"></div>
-    <div class="lbl">軍の数（大将が討たれた軍から脱落。最後に残った軍の勝ち）</div>
+    <div class="lbl">戦い方</div>
+    <div class="row" id="kinds">
+      <div class="opt on" data-k="ffa">乱戦（ほかの軍はすべて敵）</div>
+      <div class="opt" data-k="coop">協力戦（人間どうしは味方、敵はCPU）</div>
+    </div>
+    <div id="coopBox" style="display:none">
+      <div class="lbl">味方の軍（人間の将＋足りない分は味方CPU）</div>
+      <div class="row" id="allies"><div class="opt on" data-n="1">1軍</div><div class="opt" data-n="2">2軍</div><div class="opt" data-n="3">3軍</div><div class="opt" data-n="4">4軍</div></div>
+      <div class="lbl">敵の軍（CPU）</div>
+      <div class="row" id="foes"><div class="opt" data-n="1">1軍</div><div class="opt on" data-n="2">2軍</div><div class="opt" data-n="3">3軍</div><div class="opt" data-n="4">4軍</div></div>
+      <div class="lbl">敵の兵力（味方の何倍か）</div>
+      <div class="row" id="odds"><div class="opt" data-x="1">×1 互角</div><div class="opt" data-x="1.5">×1.5 劣勢</div><div class="opt on" data-x="2">×2 無謀</div><div class="opt" data-x="3">×3 絶望</div></div>
+      <div style="font-size:12px;color:#c9b88a;margin:2px 0 6px">数で負ける戦いは策で勝つ。兵には<b>士気</b>があり、横や後ろから襲われたり、騎兵に突っ込まれたり、損害が増えたりすると崩れて逃げ出す。<b>森に潜んだ部隊からの奇襲</b>は大きく士気をくじく。敵将を討てばその軍は総崩れ。おすすめの戦場は森林・渡河・山岳。</div>
+    </div>
+    <div class="lbl" id="teamsLbl">軍の数（大将が討たれた軍から脱落。最後に残った軍の勝ち）</div>
     <div class="row" id="teams">
       <div class="opt on" data-nt="2">2軍（一騎打ち）</div>
       <div class="opt" data-nt="3">3軍（三つ巴）</div>
@@ -139,6 +154,7 @@ kbd{background:#33281a;border:1px solid #6a5a3a;border-radius:3px;padding:0 5px;
       <tr><td><kbd>F</kbd> 照準地点へ移動 / <kbd>C</kbd> 照準地点へ突撃</td><td><kbd>H</kbd> 待機 / <kbd>R</kbd> 自分の元へ集結 / <kbd>G</kbd> 護衛にする・外す</td></tr>
       <tr><td colspan="2"><kbd>Q</kbd>を押しながら<kbd>1</kbd>〜<kbd>7</kbd> 陣形（横隊・一列・縦隊・方陣・楔形・散開・盾壁）。複数の部隊を選ぶと軍全体が並び直す ／ 三人称はホイールで寄る・引く</td></tr>
       <tr><td colspan="2" style="color:#9cf">開戦前に布陣の時間がある（90秒）。地図で部隊をドラッグして並べ、陣形と護衛を決めて Enter。部隊が4分の1を切ると60秒後に本陣から援軍が来る。</td></tr>
+      <tr><td colspan="2" style="color:#9f9">兵には士気（部隊一覧の緑のバー）がある。側面・背後・突撃・奇襲・損害で下がり、0になると潰走する。将のそばや戦っていない間は回復し、しばらくすると立て直す。</td></tr>
       <tr><td colspan="2" style="color:#e9c77a">命令は伝令が馬で届ける。遠い部隊ほど遅く、伝令が敵に捕まると届かない。敵は味方の視界内にいるときしか見えない。</td></tr>
     </table>
     <button class="go" id="go">出陣</button>
