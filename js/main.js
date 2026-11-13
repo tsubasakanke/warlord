@@ -124,7 +124,12 @@ function clampDeploy(t, x, z) { const Z = zoneDims(t), [lx, d] = toFrame(t, x, z
 
 // ===== 装備・編成（武具画面と編成画面で選ぶ） =====
 const LO_KEY = 'warlord-lo';
-const LO_DEF = { self: 'gothic', wpn: 'glaive', army: 'milanese', foe: 'auto', comp: DEFAULT_COMP };
+const LO_DEF = { self: 'gothic', wpn: 'glaive', army: 'milanese', foe: 'auto', comp: DEFAULT_COMP, q: 'auto' };
+// 画質：pr=描画解像度の倍率, post=光のにじみ等, sh=影の細かさ, grass=草の本数。自動は重いと解像度→にじみの順に下げる
+const QUAL = { high: { pr: 2, post: true, sh: 4096, soft: true, grass: 9000 }, mid: { pr: 1.25, post: true, sh: 2048, soft: true, grass: 6000 },
+  low: { pr: 1, post: false, sh: 2048, soft: false, grass: 3500 }, auto: { pr: 1.5, post: true, sh: 2048, soft: true, grass: 6000 } };
+let QS = QUAL.auto, usePost = true, curPR = 1, GRASS_N = 6000;
+const PERF = { acc: 0, n: 0, t: 0, fps: 0 };
 let LO = { ...LO_DEF };
 try { Object.assign(LO, JSON.parse(localStorage.getItem(LO_KEY) || '{}')); } catch (e) {}
 const validComp = c => Array.isArray(c) && c.length === 10 && c.some(q => q && TYPES[q.t]);
@@ -705,7 +710,7 @@ function updateHUD(dt) {
   $('hint').innerHTML = `<b>F</b> 照準へ移動 <b>C</b> 突撃 <b>H</b> 待機 <b>R</b> 集結 <b>G</b> 護衛 <b>T</b> 構え<br><b>Tab</b> 地図 <b>1-0</b> 部隊 <b>@</b> 全部隊 <b>V</b> 視点 <b>E</b> ${player.mounted ? '下馬' : '乗馬'}<br><b>Q</b>＋数字 陣形（横隊・一列・縦隊・方陣・楔形・散開・盾壁）`;
   $('wpninfo').innerHTML = `${WEAPONS[player.wpn].name}　${ARMORS[heroArmor[ME]].name}${player.mounted ? `　<span style="color:#e8c77a">騎乗中 ${Math.round(Math.abs(h.spd) * 3.6)}km/h</span>` : near ? '　<span style="color:#e8c77a">E で乗馬</span>' : ''}`;
   $('lockmsg').style.display = (document.pointerLockElement || mapOpen || TEST || ended || $('end').style.display === 'flex') ? 'none' : 'block';
-  $('netinfo').textContent = NET.mode === 'solo' ? '' : `オンライン（${NET.mode === 'host' ? 'ホスト' : 'ゲスト'}・${NET.via}）部屋 ${NET.room}　${NET.ping ? `遅延 約${NET.ping}ms` : ''}`;
+  $('netinfo').textContent = (PERF.fps ? `${PERF.fps}fps 画質${{ auto: '自動', high: '高', mid: '中', low: '低' }[LO.q] || '自動'}${LO.q === 'auto' ? `(${Math.round(curPR * 100)}%${usePost ? '' : '・軽量'})` : ''}　` : '') + (NET.mode === 'solo' ? '' : `オンライン（${NET.mode === 'host' ? 'ホスト' : 'ゲスト'}・${NET.via}）部屋 ${NET.room}　${NET.ping ? `遅延 約${NET.ping}ms` : ''}`);
   const rb = $('readyBtn'); if (rb) { rb.style.display = phase === 'deploy' ? 'inline-block' : 'none'; rb.textContent = NET.mode === 'solo' ? `開戦（残り${Math.ceil(deployT)}秒）` : ready.has(ME) ? `準備完了（他の将を待っています ${Math.ceil(deployT)}秒）` : `準備完了（残り${Math.ceil(deployT)}秒）`; }
   let fight = 0; for (const s of squads) if (s.engaged > 0.1 && Math.hypot(s.cx - player.x, s.cz - player.z) < 90) fight += s.engaged * s.alive.length; SFX.ambient(fight / 160);
 }
@@ -718,9 +723,11 @@ const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 const TREES = [], O = newOut(), P = newPose(), MW = new THREE.Matrix4(), _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
 
 // 兵士をまとめて描くクラス（体のパーツごとに1つの InstancedMesh）
+// 兵の群れ：部位ごとの InstancedMesh。毎フレーム、映っている兵だけを先頭から詰めて書く（映らない兵は頂点処理もしない）
+const SMALL = new Set(['couter', 'hand', 'poleyn', 'tasset']); // 遠くの兵では省く小さな部品
 class Crowd {
   constructor(team, armorId, cap, kinds) {
-    const b = buildBody(team, armorId, false), mk = (geo, n) => { const im = new THREE.InstancedMesh(geo, MAT, n); im.instanceMatrix.setUsage(THREE.DynamicDrawUsage); im.frustumCulled = false; im.castShadow = true; im.receiveShadow = true; for (let i = 0; i < n; i++) im.setMatrixAt(i, ZERO); scene.add(im); this.all.push(im); return im; };
+    const b = buildBody(team, armorId, false), mk = (geo, n) => { const im = new THREE.InstancedMesh(geo, MAT, n); im.instanceMatrix.setUsage(THREE.DynamicDrawUsage); im.frustumCulled = false; im.castShadow = true; im.receiveShadow = true; im.count = 0; scene.add(im); this.all.push(im); return im; };
     this.all = []; this.cap = cap; this.parts = {};
     for (const k of SIDED) if (b[k]) this.parts[k] = mk(b[k], cap * 2);
     for (const k of SINGLE) if (b[k]) this.parts[k] = mk(b[k], cap);
@@ -729,22 +736,20 @@ class Crowd {
     this.shd = {}; for (const k of kinds.shd) this.shd[k] = mk(buildShield(team, k, false), cap);
     if (kinds.horse) { const hp = buildHorse(team, kinds.horse, false, armorId); this.hb = mk(hp.body, cap); this.hn = mk(hp.neck, cap); this.hl = mk(hp.leg, cap * 4); this.hd = mk(hp.legL, cap * 4); }
   }
-  write(i, e, O, horse) {
-    const P = this.parts;
-    for (const k of SIDED) { const im = P[k]; if (im) { im.setMatrixAt(i * 2, O.p[k][0]); im.setMatrixAt(i * 2 + 1, O.p[k][1]); } }
-    for (const k of SINGLE) { const im = P[k]; if (!im) continue; if (k === 'head' && e.light && this.lhead) { this.lhead.setMatrixAt(i, O.p.head[0]); im.setMatrixAt(i, ZERO); } else im.setMatrixAt(i, O.p[k][0]); }
-    if (this.wpn[e.wpn]) this.wpn[e.wpn].setMatrixAt(i, O.wpn);
-    if (e.shieldKind && this.shd[e.shieldKind]) this.shd[e.shieldKind].setMatrixAt(i, O.shd);
-    if (horse && this.hb) { this.hb.setMatrixAt(i, O.hb); this.hn.setMatrixAt(i, O.hn); for (let k = 0; k < 4; k++) { this.hl.setMatrixAt(i * 4 + k, O.hl[k]); this.hd.setMatrixAt(i * 4 + k, O.hl[k + 4]); } }
+  begin() { for (const im of this.all) im.count = 0; }
+  // 姿勢を書き、兵ごとに控え（e._mc）を残す。間引いたフレームは put(e) で控えをそのまま書く
+  write(e, O, horse, far) {
+    const P = this.parts, L = e._ml || (e._ml = []), c = e._mc || (e._mc = new Float32Array(40 * 16)); let j = 0; L.length = 0;
+    const add = (im, m) => { m.toArray(c, j); j += 16; L.push(im); };
+    for (const k of SIDED) { const im = P[k]; if (im && !(far && SMALL.has(k))) { add(im, O.p[k][0]); add(im, O.p[k][1]); } }
+    for (const k of SINGLE) { const im = P[k]; if (!im) continue; if (k === 'head' && e.light && this.lhead) add(this.lhead, O.p.head[0]); else add(im, O.p[k][0]); }
+    if (this.wpn[e.wpn]) add(this.wpn[e.wpn], O.wpn);
+    if (e.shieldKind && this.shd[e.shieldKind]) add(this.shd[e.shieldKind], O.shd);
+    if (horse && this.hb) { add(this.hb, O.hb); add(this.hn, O.hn); for (let k = 0; k < 4; k++) { add(this.hl, O.hl[k]); add(this.hd, O.hl[k + 4]); } }
+    this.put(e);
   }
-  hide(i, e) {
-    const P = this.parts;
-    for (const k of SIDED) { const im = P[k]; if (im) { im.setMatrixAt(i * 2, ZERO); im.setMatrixAt(i * 2 + 1, ZERO); } }
-    for (const k of SINGLE) if (P[k]) P[k].setMatrixAt(i, ZERO); if (this.lhead) this.lhead.setMatrixAt(i, ZERO);
-    if (this.wpn[e.wpn]) this.wpn[e.wpn].setMatrixAt(i, ZERO); if (e.shieldKind && this.shd[e.shieldKind]) this.shd[e.shieldKind].setMatrixAt(i, ZERO);
-    if (this.hb) { this.hb.setMatrixAt(i, ZERO); this.hn.setMatrixAt(i, ZERO); for (let k = 0; k < 4; k++) { this.hl.setMatrixAt(i * 4 + k, ZERO); this.hd.setMatrixAt(i * 4 + k, ZERO); } }
-  }
-  flush() { for (const im of this.all) im.instanceMatrix.needsUpdate = true; }
+  put(e) { const c = e._mc, L = e._ml; if (!L) return; for (let n = 0; n < L.length; n++) { const im = L[n], a = im.instanceMatrix; if (im.count >= a.count) continue; a.array.set(c.subarray(n * 16, n * 16 + 16), im.count * 16); im.count++; } }
+  flush() { for (const im of this.all) { if (!im.count && im._was === 0) continue; im._was = im.count; const a = im.instanceMatrix; if (a.clearUpdateRanges) { a.clearUpdateRanges(); a.addUpdateRange(0, Math.max(16, im.count * 16)); } a.needsUpdate = true; } }
 }
 
 // 粒子（土煙・火花）
@@ -810,13 +815,13 @@ function flagMaterial() {
 
 function initRender() {
   renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true, preserveDrawingBuffer: TEST });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight);
+  QS = QUAL[LO.q] || QUAL.auto; usePost = QS.post; GRASS_N = QS.grass; curPR = Math.min(devicePixelRatio, QS.pr); renderer.setPixelRatio(curPR); renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.62;
-  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = QS.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
   scene = new THREE.Scene(); const fogC0 = new THREE.Color({ snow: 0xc9d2dc, mesa: 0xc8a888, forest: 0x9fb0b8 }[MAP] || 0xa9bcd0); scene.fog = new THREE.Fog(fogC0, MAP === 'forest' ? 80 : MAP === 'snow' ? 90 : 120, MAP === 'snow' ? 520 : 640);
   camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.06, 2000); scene.add(camera);
   // ポストプロセス（光のにじみ・周辺減光・軽い粒状感）
-  if (!TEST) {
+  if (!TEST && (QS.post || LO.q === 'auto')) {
     const rt = new THREE.WebGLRenderTarget(innerWidth * renderer.getPixelRatio(), innerHeight * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 4 });
     composer = new EffectComposer(renderer, rt);
     composer.addPass(new RenderPass(scene, camera));
@@ -838,7 +843,7 @@ function initRender() {
   envDressing(envScene);
   scene.environment = new THREE.PMREMGenerator(renderer).fromScene(envScene, 0.02).texture;
   scene.add(new THREE.HemisphereLight(0xd6e4ff, 0x4a4630, 0.55));
-  const dl = new THREE.DirectionalLight(0xfff0d8, 2.4); dl.position.copy(sun).multiplyScalar(150); dl.castShadow = true; dl.shadow.mapSize.set(4096, 4096);
+  const dl = new THREE.DirectionalLight(0xfff0d8, 2.4); dl.position.copy(sun).multiplyScalar(150); dl.castShadow = true; dl.shadow.mapSize.set(QS.sh, QS.sh);
   Object.assign(dl.shadow.camera, { left: -55, right: 55, top: 55, bottom: -55, near: 10, far: 400 }); dl.shadow.bias = -0.0004; dl.shadow.normalBias = 0.03; scene.add(dl, dl.target); window._dl = dl;
   // 地形（マップごとの色）
   const tg = new THREE.PlaneGeometry(640, 640, 256, 256); tg.rotateX(-Math.PI / 2);
@@ -1025,28 +1030,28 @@ function updateCamera(dt) {
 }
 
 function render(dt) {
-  frameNo++; windU.value += dt; CLOTH_TIME.value = windU.value;
+  const _t0 = performance.now(); frameNo++; windU.value += dt; CLOTH_TIME.value = windU.value;
   updateViewmodel(dt); updateCamera(dt); FX.update(dt);
   const spMe = spotters(ME), cp = camera.position, cdir = new THREE.Vector3(); camera.getWorldDirection(cdir);
   const all = spectate || elim[ME]; for (const e of ents) if (e.team !== ME) e.seen = e.alive && (all || ally(e.team, ME) || canSee(spMe, e));
   // 兵士
+  for (let t = 0; t < NT; t++) crowds[t].begin();
   for (const e of ents) {
-    if (e.type === 'hero') continue; const C = crowds[e.team], i = e.ci, dead = !e.alive;
+    if (e.type === 'hero') continue; const C = crowds[e.team], dead = !e.alive;
     if (dead) e.deadT += dt; e.hitAge = (e.hitAge ?? 9) + dt; e.blockAge = (e.blockAge ?? 9) + dt;
     const vis = !e.gone && (e.team === ME || e.seen || (dead && Math.hypot(e.x - cp.x, e.z - cp.z) < 80));
-    if (!vis) { if (e.shown !== false) { C.hide(i, e); e.shown = false; } continue; }
+    if (!vis) { e.shown = false; continue; }
     const dx = e.x - cp.x, dz = e.z - cp.z, d2 = dx * dx + dz * dz;
-    if (dead && e.deadT > 1.2 && e.shown === true && e.settled) continue;
-    if (e.shown === true && d2 > 160 * 160 && (frameNo + e.id) % 3) continue;
-    if (e.shown === true && d2 > 70 * 70 && !dead && (frameNo + e.id) % 2) continue;
-    if (e.shown === true && d2 > 30 * 30 && (dx * cdir.x + dz * cdir.z) < -0.3 * Math.sqrt(d2) && (frameNo + e.id) % 4) continue;
+    if (d2 > 35 * 35 && (dx * cdir.x + dz * cdir.z) < -0.45 * Math.sqrt(d2)) { e.shown = false; continue; } // 背後の遠い兵は描かない
+    if (e.shown === true && ((dead && e.deadT > 1.2 && e.settled) || (d2 > 150 * 150 && (frameNo + e.id) % 4) || (d2 > 85 * 85 && (frameNo + e.id) % 3) || (d2 > 40 * 40 && !dead && (frameNo + e.id) % 2)
+      || (d2 > 30 * 30 && (dx * cdir.x + dz * cdir.z) < -0.3 * Math.sqrt(d2) && (frameNo + e.id) % 4))) { C.put(e); continue; }
     if (e.h) { e.h.x = e.x; e.h.z = e.z; e.h.y = e.y; e.h.face = e.face; if (dead) { e.h.alive = false; e.h.deadT = e.deadT; } }
     const riding = e.mounted && e.alive;
     computePose(e, P, O, e.h && riding ? e.h : null, windU.value);
     if (e.h && !riding) poseHorse(e.h, O);
-    C.write(i, e, O, e.h); e.shown = true; if (dead && e.deadT > 1.2) e.settled = true;
+    C.write(e, O, e.h, d2 > 75 * 75); e.shown = true; if (dead && e.deadT > 1.2) e.settled = true;
   }
-  for (let t = 0; t < NT; t++) crowds[t].flush();
+  for (let t = 0; t < NT; t++) crowds[t].flush(); const _t1 = performance.now();
   // 将
   for (let t = 0; t < NT; t++) {
     const e = heroes[t], R = heroRigs[t], hz = horses[t];
@@ -1060,12 +1065,12 @@ function render(dt) {
   let ai = 0; for (const a of arrows) { if (ai >= 800) break; _p.set(a.x, a.y, a.z); MW.lookAt(_s.set(a.x + a.vx, a.y + a.vy, a.z + a.vz), _p, camera.up); MW.setPosition(_p); IMarrow.setMatrixAt(ai++, MW); }
   for (let i = ai; i < 800; i++) IMarrow.setMatrixAt(i, ZERO); IMarrow.instanceMatrix.needsUpdate = true;
   // 伝令（騎馬）
-  const mi = new Array(NT).fill(0);
+  const mi = new Array(NT).fill(0); for (let t = 0; t < NT; t++) msgCrowds[t].begin();
   for (const m of msgs) { const t = m.team; if (mi[t] >= 60) continue; if (!ally(t, ME) && !all && !canSee(spMe, m)) continue;
     const fe = { id: mi[t], x: m.x, y: m.y ?? H(m.x, m.z), z: m.z, face: m.face || 0, spd: 13, phase: 0, anim: 0, alive: true, mounted: true, swing: 'couch', wpn: 'none', light: false };
     const fh = { x: fe.x, y: fe.y, z: fe.z, face: fe.face, spd: 13, cyc: m.cyc || 0, gait: 3, alive: true };
-    computePose(fe, P, O, fh, windU.value); msgCrowds[t].write(mi[t]++, fe, O, fh); }
-  for (let t = 0; t < NT; t++) { for (let i = mi[t]; i < (msgCrowds[t].lastN || 0); i++) msgCrowds[t].hide(i, { wpn: 'none' }); msgCrowds[t].lastN = mi[t]; msgCrowds[t].flush(); }
+    fe._mc = m._mc || (m._mc = new Float32Array(40 * 16)); fe._ml = m._ml || (m._ml = []); computePose(fe, P, O, fh, windU.value); msgCrowds[t].write(fe, O, fh, false); mi[t]++; }
+  for (let t = 0; t < NT; t++) msgCrowds[t].flush();
   // 旗と番号札
   for (const bn of bannerList) { const s = bn.s, n = s.alive.length, im = flagIM[s.team];
     const bearer = s.alive.find(m => m.type !== 'hero');
@@ -1084,7 +1089,7 @@ function render(dt) {
   // 草をカメラの周りに敷き直す
   if (!grassCenter || Math.hypot(cp.x - grassCenter.x, cp.z - grassCenter.z) > 10) {
     grassCenter = { x: cp.x, z: cp.z }; let k = 0; const R = 48, q = new THREE.Quaternion();
-    for (let i = 0; i < 9000; i++) { const a = (i * 2.399963) % (Math.PI * 2), r = Math.sqrt((i + 0.5) / 9000) * R;
+    for (let i = 0; i < GRASS_N; i++) { const a = (i * 2.399963) % (Math.PI * 2), r = Math.sqrt((i + 0.5) / GRASS_N) * R;
       const x = Math.round(cp.x / 2) * 2 + Math.cos(a) * r, z = Math.round(cp.z / 2) * 2 + Math.sin(a) * r, y = H(x, z), ny = Math.abs(H(x + 1, z) - H(x - 1, z)) + Math.abs(H(x, z + 1) - H(x, z - 1));
       if (ny > 1.1 || y > 50 || (zone && Math.hypot(x - zone.x, z - zone.z) < 3) || (MAP === 'river' && Math.abs(z - riverZ(x)) < 15) || (MAP === 'snow' && (Math.hypot(x, z) < 50 || i % 5))) continue;
       q.setFromAxisAngle(_s.set(0, 1, 0), x * 3.7 + z * 1.3); MW.compose(_p.set(x, y - 0.03, z), q, _s.setScalar(0.8 + ((x * 13.1 + z * 7.7) % 1 + 1) % 1 * 0.6)); grassIM.setMatrixAt(k++, MW); }
@@ -1094,7 +1099,8 @@ function render(dt) {
   aimRing.visible = selected.size > 0 && !mapOpen && player.alive && !thirdPerson;
   if (aimRing.visible) { const a = aimPoint(); aimRing.position.set(a.x, H(a.x, a.z) + 0.4, a.z); }
   if (zone) { zone.flagMat.color.set(zone.holder >= 0 ? TEAM_CLOTH[zone.holder] : 0xdddddd); zone.flag.rotation.y = Math.sin(gameT * 0.3) * 0.4 + 0.6; }
-  if (composer) { window._grain.uniforms.uTime.value = performance.now() * 0.001 % 100; composer.render(); } else renderer.render(scene, camera);
+  const _t2 = performance.now(); if (composer && usePost) { window._grain.uniforms.uTime.value = performance.now() * 0.001 % 100; composer.render(); } else renderer.render(scene, camera);
+  if (TEST) { const P = window._prof || (window._prof = { sol: 0, mid: 0, gl: 0, n: 0 }), t3 = performance.now(); P.sol += _t1 - _t0; P.mid += _t2 - _t1; P.gl += t3 - _t2; P.n++; }
 }
 
 // ===== 戦場地図（自分の本陣が下に来るよう回して表示） =====
@@ -1418,7 +1424,16 @@ function frame(dt) {
   if (player) { render(dt); if (mapOpen) drawMap(); updateHUD(dt); }
 }
 const clock = new THREE.Clock();
-function loop() { requestAnimationFrame(loop); frame(Math.min(clock.getDelta(), 0.05)); }
+function setPR(pr) { curPR = pr; renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight); if (composer) { composer.setPixelRatio(pr); composer.setSize(innerWidth, innerHeight); } }
+// 自動画質：2秒ごとの平均で、重ければ解像度を下げ（最後はにじみも切る）、余裕があれば戻す
+function autoQuality(raw) {
+  if (raw > 0.25) return; PERF.acc += raw; PERF.n++; PERF.t += raw; if (PERF.t < 2) return;
+  const ms = PERF.acc / PERF.n * 1000; PERF.fps = Math.round(1000 / ms); PERF.acc = PERF.n = PERF.t = 0;
+  if (LO.q !== 'auto' || !running) return; const top = Math.min(devicePixelRatio, QS.pr);
+  if (ms > 22) { if (curPR > 0.8) setPR(Math.max(0.75, +(curPR - 0.2).toFixed(2))); else if (usePost && composer) usePost = false; }
+  else if (ms < 13.5) { if (!usePost && composer && ms < 9) usePost = true; else if (usePost || !composer) if (curPR < top) setPR(Math.min(top, +(curPR + 0.1).toFixed(2))); }
+}
+function loop() { requestAnimationFrame(loop); const raw = clock.getDelta(); autoQuality(raw); frame(Math.min(raw, 0.05)); }
 
 const pick = a => a[Math.floor(Math.random() * a.length)];
 function pickFoe(self) { return pick(ARMOR_IDS.filter(a => a !== self)); }
@@ -1549,6 +1564,8 @@ function syncTeamOpts() {
 }
 function setupMenu() {
   $('maps').innerHTML = Object.entries(MAPS).map(([k, m], i) => `<div class="opt ${i === 0 ? 'on' : ''}" data-map="${k}">${m.name}</div>`).join('');
+  $('qual').querySelectorAll('.opt').forEach(o => o.classList.toggle('on', o.dataset.q === (LO.q || 'auto')));
+  $('qual').addEventListener('click', e => { const o = e.target.closest('.opt'); if (!o) return; LO.q = o.dataset.q; saveLO(); $('qual').querySelectorAll('.opt').forEach(x => x.classList.toggle('on', x === o)); });
   for (const g of ['maps', 'sizes', 'teams', 'kinds', 'allies', 'foes', 'odds']) $(g).addEventListener('click', e => { const o = e.target.closest('.opt'); if (!o || o.classList.contains('dis')) return; $(g).querySelectorAll('.opt').forEach(x => x.classList.remove('on')); o.classList.add('on'); syncTeamOpts(); renderComp(); });
   $('modes').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) setMode(o.dataset.mode); });
   $('tabs').addEventListener('click', e => { const o = e.target.closest('.tab'); if (!o) return; $('tabs').querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === o));
